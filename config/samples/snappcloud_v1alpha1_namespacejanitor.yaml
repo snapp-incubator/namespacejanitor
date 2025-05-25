@@ -1,0 +1,9 @@
+apiVersion: snappcloud.snappcloud.io/v1alpha1
+kind: NamespaceJanitor
+metadata:
+  labels:
+    app.kubernetes.io/name: namespacejanitor
+    app.kubernetes.io/managed-by: kustomize
+  name: namespacejanitor-sample
+spec:
+  # TODO(user): Add fields here
