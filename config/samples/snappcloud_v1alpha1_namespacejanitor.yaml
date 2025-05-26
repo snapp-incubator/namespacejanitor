@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: namespacejanitor-sample
 spec:
-  # TODO(user): Add fields here
+  additionalRecipients:
+    - "test@example.com"

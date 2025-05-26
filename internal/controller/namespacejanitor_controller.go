@@ -131,102 +131,148 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		logger.Info("Namespace is no longer unknown. No further action is needed.", "namespace", namespaceName, "currentTeamLabel", currentTeamLabel)
 		// If a flag was previously applied by us, consider removing it or updating status.
 		// For now, simple stop.
-		if janitorCRExist && janitorCR.Status.LastFlagApplied != "" {
-			janitorCR.Status.LastFlagApplied = "N/A (team claimed)"
-			janitorCR.Status.Conditions = []metav1.Condition{
-				{Type: "Managed", Status: metav1.ConditionFalse, Reason: "TeamClaimed", Message: "Namespace team label is no longer unknown."},
-			}
-			if err := r.Status().Update(ctx, &janitorCR); err != nil {
-				logger.Error(err, "failed to update NamespaceJanitor CR status after team claimed")
-				// continue, dont block on status update
-			}
-		}
+		// if janitorCRExist && janitorCR.Status.LastFlagApplied != "" {
+		// 	janitorCR.Status.LastFlagApplied = "N/A (team claimed)"
+		// 	janitorCR.Status.Conditions = []metav1.Condition{
+		// 		{Type: "Managed", Status: metav1.ConditionFalse, Reason: "TeamClaimed", Message: "Namespace team label is no longer unknown."},
+		// 	}
+		// 	if err := r.Status().Update(ctx, &janitorCR); err != nil {
+		// 		logger.Error(err, "failed to update NamespaceJanitor CR status after team claimed")
+		// 		// continue, dont block on status update
+		// 	}
+		// }
+		// TO DO: add logic to *remove* our flag if them team is now known
 		return ctrl.Result{}, nil // No requeue needed for this specefic namespace if it's claimed.
 	}
 
-	// State transaction logic
-	var desiredFlag string
-	var actionTaken string
-
-	if age >= YellowThreshold && currentFlagLabel != FlagYellow {
-		// Only apply if it's not already yellow
-		// This also handles the case where currentFlagLabel is empty (no flag applied yet)
-		desiredFlag = FlagYellow
-		actionTaken = "AppliedYellowFlag"
-	}
-
-	// else if age >= RedThreshold && currentFlagLabel == FlagYellow {
-	// desiredFlag = FlagRed
-	// actionTaken = "AppliedRedFlag"
-	// }
-	if desiredFlag != "" && currentFlagLabel != desiredFlag {
-		logger.Info("Applying flag", "namespace", namespaceName, "desiredFlag", desiredFlag, "currentFlagLabel", currentFlagLabel, "age", age.Round(time.Hour))
-		if ns.Labels == nil {
-			ns.Labels = make(map[string]string)
+	if age >= DeleteThreshold && currentFlagLabel == FlagRed {
+		// --- Delete State ---
+		logger.Info("Namespace has passed deletion threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
+		if err := r.notifyAndDeleteNamespace(ctx, &ns, &janitorCR, logger); err != nil {
+			logger.Error(err, "Failed to execute deletion process for namespace", "namespace", ns.Name)
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err // Retry deletion process soon
 		}
-		originalLabels := client.MergeFrom(ns.DeepCopy()) // for patch
-		ns.Labels[FlagLabelKey] = desiredFlag
-		if err := r.Patch(ctx, &ns, originalLabels); err != nil {
-			logger.Error(err, "failed to patch namespace labels", "namespace", namespaceName)
-			return ctrl.Result{RequeueAfter: time.Minute}, err //use requeue to retry on failure
-		}
-		logger.Info("Successfully applied flag", "namespace", namespaceName, "desiredFlag", desiredFlag)
 
-		// Send a notification to the team
-		r.sendNotification(ctx, EventNotification{
-			NamespaceName:        ns.Name,
-			CurrentFlag:          map[string]string{FlagLabelKey: desiredFlag},
-			ActionTaken:          actionTaken,
-			Age:                  age.Round(time.Hour).String(),
-			CreationTimestamp:    ns.CreationTimestamp.Time,
-			Requester:            ns.Annotations[RequesterAnnotationKey],
-			AdditionalRecipients: janitorCR.Spec.AdditionalRecipients, // will be empty if CR doesnt exist
-		}, logger)
-
+		// Deletion was successful, update status ans stop reconciliation for this ns
 		if janitorCRExist {
-			janitorCR.Status.LastFlagApplied = desiredFlag
-			janitorCR.Status.LastNotificationSent = &metav1.Time{Time: time.Now()}
-			janitorCR.Status.Conditions = []metav1.Condition{
-				{Type: "Managed", Status: metav1.ConditionTrue, Reason: actionTaken, Message: fmt.Sprintf("Flag %s applied to namespace.", desiredFlag), LastTransitionTime: metav1.Now()},
-			}
+			janitorCR.Status.LastFlagApplied = "Deleted"
+			// update status
 			if err := r.Status().Update(ctx, &janitorCR); err != nil {
-				logger.Error(err, "Failed to update NamespaceJanitor status after applying flag")
-				// Don't let status update failure block main logic, but log it.
+				logger.Error(err, "failed to update NamespaceJanitor CR status after deletion")
+				// continue, dont block on status update
 			}
 		}
-	} else if desiredFlag == "" && currentFlagLabel != "" {
-		logger.Info("Namespace is currently flagged but does not meet criteria for new flag.", "namespace", ns.Name, "currentFlag", currentFlagLabel)
+		return ctrl.Result{}, nil // Stop Reconciliation, the ns is gone
+	} else if age >= RedThreshold && currentFlagLabel == FlagYellow {
+		// --- Red Flag State
+		logger.Info("Namespace has passed red flag threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
+		if err := r.notifyAndFlagNamespace(ctx, &ns, &janitorCR, FlagRed, logger); err != nil {
+			logger.Error(err, "Failed to execute red flag process for namespace", "namespace", ns.Name)
+			return ctrl.Result{RequeueAfter: time.Minute}, err // Retry red flag process soon
+		}
+
+	} else if age >= YellowThreshold && currentFlagLabel == "" {
+		// --- Yellow Flag State
+		logger.Info("Namespace has passed yellow flag threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
+		if err := r.notifyAndFlagNamespace(ctx, &ns, &janitorCR, FlagYellow, logger); err != nil {
+			logger.Error(err, "Failed to execute red flag process for namespace", "namespace", ns.Name)
+			return ctrl.Result{RequeueAfter: time.Minute}, err // Retry red flag process soon
+		}
+
 	} else {
-		logger.Info("No flag action needed for namespace at this time.", "namespace", ns.Name, "currentFlag", currentFlagLabel, "age", age.Round(time.Hour))
+		logger.Info("No state transition required at this time.", "namespace", ns.Name, "currentFlag", currentFlagLabel, "age", age.Round(time.Hour))
 	}
-	// calculate next requeue time
+
 	var requeueAfter time.Duration
+	// Recalculate the current flag label in case it was just changed.
+	currentFlagLabel = ns.Labels[FlagLabelKey]
 	if currentTeamLabel == TeamUnknown {
-		if currentFlagLabel != FlagYellow && age < YellowThreshold {
+		switch currentFlagLabel {
+		case "":
 			requeueAfter = YellowThreshold - age
-		} else {
-			// If it's already yellow, or past yellow threshold and still unknown,
-			// check periodically (e.g., daily) in case thresholds change or for future states.
-			requeueAfter = 3 * time.Minute // Or a shorter interval if more states are imminent
+		case FlagYellow:
+			requeueAfter = RedThreshold - age
+		case FlagRed:
+			requeueAfter = DeleteThreshold - age
 		}
 	}
+
+	// If the next check is past due, requeue for the short interval to re-evaluate.
 	if requeueAfter <= 0 {
-		requeueAfter = 5 * time.Minute // Check soon
+		// Check again soon if we're past a threshold but the state transition didn't happen for some reason.
+		requeueAfter = 5 * time.Minute
+	}
+	logger.Info("Reconciliation finished, scheduling next check.", "after", requeueAfter.Round(time.Second))
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, flag string, logger logr.Logger) error {
+	action := fmt.Sprintf("Applied%sFlag", flag)
+	// Idempotenty check: Dont do anything if the label is already correct.
+	if ns.Labels[FlagLabelKey] == flag {
+		logger.Info("Namespace already has the correct flag label.", "namespace", ns.Name, "flag", flag)
+		return nil
+	}
+	patch := client.MergeFrom(ns.DeepCopy())
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+	ns.Labels[FlagLabelKey] = flag
+	logger.Info("Applying flag label to namespace", "namespace", ns.Name, "flag", flag)
+	if err := r.Patch(ctx, ns, patch); err != nil {
+		logger.Error(err, "Failed to apply flag label to namespace", "namespace", ns.Name, "flag", flag)
+		return err
 	}
 
-	// Ensure a minimum requeue time to avoid excessive API calls
-	minRequeue := 1 * time.Minute
-	if requeueAfter < minRequeue && requeueAfter > 0 {
-		requeueAfter = minRequeue
+	r.sendNotification(ctx, EventNotification{
+		NamespaceName:        ns.Name,
+		CurrentFlag:          map[string]string{FlagLabelKey: flag},
+		ActionTaken:          action,
+		Age:                  time.Since(ns.CreationTimestamp.Time).String(),
+		Requester:            ns.Annotations[RequesterAnnotationKey],
+		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+	}, logger)
+
+	// Update the CR status if it exists
+	if janitorCR.UID != "" { // A reliable way to check if the CR object is real
+		janitorCR.Status.LastFlagApplied = flag
+		janitorCR.Status.Conditions = []metav1.Condition{
+			{Type: "Managed", Status: metav1.ConditionTrue, Reason: action, Message: fmt.Sprintf("Flag %s applied.", flag), LastTransitionTime: metav1.Now()},
+		}
+		if err := r.Status().Update(ctx, janitorCR); err != nil {
+			logger.Error(err, "Failed to update NamespaceJanitor status after applying flag")
+			// Don't fail the whole operation for a status update error.
+		}
 	}
 
-	if requeueAfter > 0 {
-		logger.Info("Scheduling next reconciliation check", "after", requeueAfter.Round(time.Second))
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	return nil
+}
+
+func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
+	logger.Info("Final notification before namespace deletion", "namespace", ns.Name)
+	r.sendNotification(ctx, EventNotification{
+		NamespaceName:        ns.Name,
+		CurrentFlag:          map[string]string{FlagLabelKey: FlagRed},
+		ActionTaken:          "DeletingNamespace",
+		Age:                  time.Since(ns.CreationTimestamp.Time).String(),
+		Requester:            ns.Annotations[RequesterAnnotationKey],
+		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+	}, logger)
+
+	// Here you might add a short "grace period" if needed, e.g., time.Sleep(30 * time.Second)
+	// But it's better to handle that with longer thresholds.
+
+	logger.Info("Proceeding with namespace deletion", "namespace", ns.Name)
+	if err := r.Delete(ctx, ns); err != nil {
+		// If the namespace is already being terminated, IsNotFound can be returned.
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Failed to delete namespace", "namespace", ns.Name)
+			return err
+		}
 	}
 
-	logger.Info("Reconciliation finished, no specific requeue scheduled by age logic.")
-	return ctrl.Result{}, nil
+	logger.Info("Namespace deletion command issued successfully", "namespace", ns.Name)
+	return nil
 }
 
 // sendNotification is a placeholder for actual notification logic
