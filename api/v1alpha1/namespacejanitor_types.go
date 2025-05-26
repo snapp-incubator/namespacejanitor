@@ -25,21 +25,30 @@ import (
 
 // NamespaceJanitorSpec defines the desired state of NamespaceJanitor
 type NamespaceJanitorSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of NamespaceJanitor. Edit namespacejanitor_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// AdditionalRecipients is a list of email addresses for receiving notifications
+	// about lifecycle events for the namespace.
+	// +optional
+	AdditionalRecipients []string `json:"additionalRecipients,omitempty"`
+	// TODO(Extend Deletation Threshold)
 }
 
 // NamespaceJanitorStatus defines the observed state of NamespaceJanitor
 type NamespaceJanitorStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// LastFlagApplied is the most recent lifecycle event that was applied to the namespace.
+	// +optional
+	LastFlagApplied string `json:"lastFlagApplied,omitempty"`
+	// LastNotificationSent records the timestamp of the last notification sent to the namespace.
+	// +optional
+	LastNotificationSent *metav1.Time `json:"lastNotificationSent,omitempty"`
+	// Conditions represent the latest available observations of an object's current state.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+//+kubebuilder:resource:scope=Namespaced,shortName=nsj;nsjanitor
+// NamespaceJanitor is the Schema for the namespacejanitors API
 
 // NamespaceJanitor is the Schema for the namespacejanitors API
 type NamespaceJanitor struct {
