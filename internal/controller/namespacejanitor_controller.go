@@ -259,8 +259,7 @@ func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Contex
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
 	}, logger)
 
-	// Here you might add a short "grace period" if needed, e.g., time.Sleep(30 * time.Second)
-	// But it's better to handle that with longer thresholds.
+
 
 	logger.Info("Proceeding with namespace deletion", "namespace", ns.Name)
 	if err := r.Delete(ctx, ns); err != nil {
@@ -297,11 +296,7 @@ func (r *NamespaceJanitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Namespace{}, // Source: watching Namespace objects
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-				// `o` is the Namespace object that changed.
-				// We want to trigger reconciliation for a NamespaceJanitor CR
-				// that would be responsible for this namespace.
-				// This CR would live *in* the namespace `o.GetName()`.
-				// We assume a default name for this CR.
+
 				return []reconcile.Request{
 					{NamespacedName: types.NamespacedName{
 						Name:      DefaultJanitorCRName, // e.g., "default-janitor-config"
