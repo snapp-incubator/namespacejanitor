@@ -59,7 +59,7 @@ const (
 // EventNotification is a struct that represents a notification event(can be expanded)
 type EventNotification struct {
 	NamespaceName        string    `json:"namespace"`
-	CurrentFlag          string    `json:"CurrentFlag"`
+	CurrentFlag          string    `json:"currentFlag"`
 	ActionTaken          string    `json:"actionTaken"`
 	Age                  string    `json:"age"`
 	CreationTimestamp    time.Time `json:"creationTimestamp"`
@@ -77,36 +77,62 @@ type NamespaceJanitorReconciler struct {
 // +kubebuilder:rbac:groups=snappcloud.snappcloud.io,resources=namespacejanitors/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=snappcloud.snappcloud.io,resources=namespacejanitors/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch;delete
+func janitorCRName(namespaceName string) string {
+	return fmt.Sprintf("%s-janitor", namespaceName)
+}
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the NamespaceJanitor object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx).WithValues("namespacejanitor", req.NamespacedName, "targetNamespace", req.Namespace)
+	logger := log.FromContext(ctx)
 	logger.Info("Reconciling started")
 
+	namespaceName := req.Namespace
 	var janitorCR snappcloudv1alpha1.NamespaceJanitor
-	janitorCRExist := true
 	if err := r.Get(ctx, req.NamespacedName, &janitorCR); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("NamespaceJanitor CR not found. Default logic will be applied to the namespace if relevant.", "crName", req.NamespacedName)
-			janitorCRExist = false
-			janitorCR.Spec = snappcloudv1alpha1.NamespaceJanitorSpec{}
-		} else {
-			logger.Error(err, "failed to get NamespaceJanitor CR")
-			return ctrl.Result{}, err // Retry if it's not a not found error
+			logger.Info("NamespaceJanitor CR not found. Creating a default one.", "namespace", namespaceName)
+			var nsForCheck corev1.Namespace
+			if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &nsForCheck); err != nil {
+				logger.Info("Parent namespace not found while attempting to create default CR. Assuming it was deleted.", "namespace", namespaceName)
+				return ctrl.Result{}, err
+			}
+			if !nsForCheck.ObjectMeta.DeletionTimestamp.IsZero() {
+				logger.Info("Parent namespace is terminating. Skipping creation of default CR.", "namespace", namespaceName)
+				return ctrl.Result{}, nil // Stop. Do not attempt to create anything.
+
+			}
+			if !isRelevent(&nsForCheck) {
+				logger.Info("Namespace is no longer relevant. Skipping creation of default CR.", "namespace", namespaceName)
+				return ctrl.Result{}, nil
+			}
+
+			// Create the default CR
+			logger.Info("NamespaceJanitor CR not found. Creating a default one.", "namespace", namespaceName)
+			defaultCR := &snappcloudv1alpha1.NamespaceJanitor{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      req.Name,
+					Namespace: req.Namespace,
+				},
+				Spec: snappcloudv1alpha1.NamespaceJanitorSpec{
+					AdditionalRecipients: []string{},
+				},
+			}
+			if err := r.Create(ctx, defaultCR); err != nil {
+				logger.Error(err, "Failed to create default NamespaceJanitor CR", "namespace", namespaceName)
+				return ctrl.Result{}, err
+			}
+			logger.Info("Successfully created default NamespaceJanitor CR.", "namespace", namespaceName)
+			return ctrl.Result{Requeue: true}, nil
 		}
+		logger.Error(err, "Failed to get NamespaceJanitor CR")
+		return ctrl.Result{}, err
 	}
 
-	// Fetch the actual Namespace objects
-	// This is the Namespace where the NamespaceJanitor CR (identified by req.NamespacedName) lives.
-	namespaceName := req.Namespace
+	// === CR EXISTS, PROCEED WITH MAIN LOGIC ===
+	// Fetch the actual Namespace object
 	var ns corev1.Namespace
 	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &ns); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -116,28 +142,27 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "failed to get target Namespace", "namespace", namespaceName)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Check if namespace is being deleted
+	if !ns.ObjectMeta.DeletionTimestamp.IsZero() {
+		logger.Info("Namespace is already in a terminating state. No action needed.", "namespace", ns.Name)
+		return ctrl.Result{}, nil
+	}
+
+	if ns.Labels[TeamLabelKey] != TeamUnknown {
+		// Call the simplified cleanup function.
+		if err := r.cleanupClaimedNamespace(ctx, &ns, &janitorCR, logger); err != nil {
+			return ctrl.Result{RequeueAfter: time.Minute}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// --- core Logic: Check and flag the namespace ---
 	currentTeamLabel := ns.Labels[TeamLabelKey]
 	currentFlagLabel := ns.Labels[FlagLabelKey]
 	age := time.Since(ns.CreationTimestamp.Time)
-
-	// If the namespace is no longer "unknown", our job for this NS (via this trigger) might be done.
-	// However, if it has one of our flags, we might still need to manage it (e.g. for Red flag or deletion).
-	// For the initial goal, if it's not "unknown", we stop.
-	if currentTeamLabel != TeamUnknown {
-		// --- NEW CLEANUP LOGIC ---
-		if err := r.cleanupClaimedNamespace(ctx, &ns, &janitorCR, janitorCRExist, logger); err != nil {
-			// If cleanup fails, retry after a short interval.
-			return ctrl.Result{RequeueAfter: time.Minute}, err
-		}
-		// Cleanup was successful, no need to requeue for this namespace.
-		// We will only reconcile it again if its labels change in a way that matches our predicate.
-		logger.Info("Cleanup of claimed namespace complete. No further action needed.")
-		return ctrl.Result{}, nil // No requeue needed for this specefic namespace if it's claimed.
-	}
 
 	if age >= DeleteThreshold && currentFlagLabel == FlagRed {
 		// --- Delete State ---
@@ -146,19 +171,8 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			logger.Error(err, "Failed to execute deletion process for namespace", "namespace", ns.Name)
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err // Retry deletion process soon
 		}
-
-		// Deletion was successful, update status ans stop reconciliation for this ns
-		if janitorCRExist {
-			janitorCR.Status.LastFlagApplied = "Deleted"
-			// update status
-			if err := r.Status().Update(ctx, &janitorCR); err != nil {
-				logger.Error(err, "failed to update NamespaceJanitor CR status after deletion")
-				// continue, dont block on status update
-			}
-		}
-		return ctrl.Result{}, nil // Stop Reconciliation, the ns is gone
 	} else if age >= RedThreshold && currentFlagLabel == FlagYellow {
-		// --- Red Flag State
+		// --- Red Flag State ---
 		logger.Info("Namespace has passed red flag threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
 		if err := r.notifyAndFlagNamespace(ctx, &ns, &janitorCR, FlagRed, logger); err != nil {
 			logger.Error(err, "Failed to execute red flag process for namespace", "namespace", ns.Name)
@@ -166,7 +180,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 
 	} else if age >= YellowThreshold && currentFlagLabel == "" {
-		// --- Yellow Flag State
+		// --- Yellow Flag State ---
 		logger.Info("Namespace has passed yellow flag threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
 		if err := r.notifyAndFlagNamespace(ctx, &ns, &janitorCR, FlagYellow, logger); err != nil {
 			logger.Error(err, "Failed to execute red flag process for namespace", "namespace", ns.Name)
@@ -192,6 +206,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// If the next check is past due, requeue for the short interval to re-evaluate.
+	// Imagine the operator was offline for two days and comes back online. requeueAfter = 7 days - 9 days = -2 days
 	if requeueAfter <= 0 {
 		// Check again soon if we're past a threshold but the state transition didn't happen for some reason.
 		requeueAfter = 5 * time.Minute
@@ -244,25 +259,18 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 
 // cleanupClaimedNamespace is called when a namespace's team label is no longer "unknown".
 // It removes the lifecycle flag and updates the status of the corresponding Janitor CR.
-func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, janitorCRExists bool, logger logr.Logger) error {
+func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
 	// Idempotency Check: If the flag label doesn't exist, there's nothing to do.
 	if _, ok := ns.Labels[FlagLabelKey]; !ok {
-		logger.Info("No flag label to clean up.", "namespace", ns.Name)
-		// If the CR status still thinks a flag is applied, correct it.
-		if janitorCRExists && janitorCR.Status.LastFlagApplied != "" {
-			patch := client.MergeFrom(janitorCR.DeepCopy())
-			janitorCR.Status.LastFlagApplied = ""
-			janitorCR.Status.Conditions = []metav1.Condition{
-				{Type: "Managed", Status: metav1.ConditionFalse, Reason: "TeamClaimed", Message: "Namespace has been claimed by a team; no longer managing.", LastTransitionTime: metav1.Now()},
-			}
-			return r.Status().Patch(ctx, janitorCR, patch)
-		}
+		logger.Info("No flag label to clean up on this claimed namespace.", "namespace", ns.Name)
 		return nil
 	}
 
 	logger.Info("Namespace has been claimed by a team. Cleaning up flag label.", "namespace", ns.Name, "team", ns.Labels[TeamLabelKey])
+
+	// Use a patch to remove the label from the namespace.
 	patch := client.MergeFrom(ns.DeepCopy())
-	delete(ns.Labels, FlagLabelKey) // Remove the label
+	delete(ns.Labels, FlagLabelKey)
 
 	if err := r.Patch(ctx, ns, patch); err != nil {
 		logger.Error(err, "Failed to remove flag label from claimed namespace", "namespace", ns.Name)
@@ -270,17 +278,21 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 	}
 	logger.Info("Successfully removed flag label.", "namespace", ns.Name)
 
-	// Update the CR status if it exists
-	if janitorCRExists {
-		patch := client.MergeFrom(janitorCR.DeepCopy())
-		janitorCR.Status.LastFlagApplied = "" // Clear the flag status
-		janitorCR.Status.Conditions = []metav1.Condition{
-			{Type: "Managed", Status: metav1.ConditionFalse, Reason: "TeamClaimed", Message: "Namespace has been claimed by a team; flag removed.", LastTransitionTime: metav1.Now()},
-		}
-		if err := r.Status().Patch(ctx, janitorCR, patch); err != nil {
-			logger.Error(err, "Failed to update NamespaceJanitor status after cleanup")
-			// Don't fail the whole operation for a status update error.
-		}
+	// Now, update the status on the NamespaceJanitor CR to reflect it's no longer managing.
+	statusPatch := client.MergeFrom(janitorCR.DeepCopy())
+	janitorCR.Status.LastFlagApplied = "CleanedUp" // Or an empty string ""
+	janitorCR.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "Managed",
+			Status:             metav1.ConditionFalse,
+			Reason:             "TeamClaimed",
+			Message:            "Namespace has been claimed by a team; lifecycle management is complete.",
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	if err := r.Status().Patch(ctx, janitorCR, statusPatch); err != nil {
+		logger.Error(err, "Failed to update NamespaceJanitor status after cleanup")
+		// Don't fail the whole operation for a status update error, but log it.
 	}
 
 	return nil
@@ -323,6 +335,31 @@ func (r *NamespaceJanitorReconciler) sendNotification(ctx context.Context, notif
 	// TODO: Implement actual notification sending
 }
 
+func isRelevent(obj client.Object) bool {
+	if obj == nil {
+		return false
+	}
+	labels := obj.GetLabels()
+	if labels == nil {
+		// A namespace without labels (like kube-public) is not relevant.
+		return false
+	}
+
+	// The namespace is actively being managed because its team is 'unknown'.
+	if labels[TeamLabelKey] == TeamUnknown {
+		return true
+	}
+
+	// The namespace is NOT 'unknown', but it still has our flag.
+	// This makes it relevant for cleanup.
+	if _, ok := labels[FlagLabelKey]; ok {
+		return true
+	}
+
+	// If neither of the above, we don't care about it.
+	return false
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *NamespaceJanitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -330,29 +367,43 @@ func (r *NamespaceJanitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&snappcloudv1alpha1.NamespaceJanitor{}).
 		// 2. watch for changes to corev1.Namespaces objects
 		Watches(
-			&corev1.Namespace{}, // Source: watching Namespace objects
+			&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-
+				// `o` is the Namespace object that changed.
+				// We create a reconcile request for the Janitor CR that *should* exist
+				// in this namespace, using our predictable naming convention.
 				return []reconcile.Request{
 					{NamespacedName: types.NamespacedName{
-						Name:      DefaultJanitorCRName, // e.g., "default-janitor-config"
-						Namespace: o.GetName(),          // The namespace where the CR should live
+						Name:      janitorCRName(o.GetName()),
+						Namespace: o.GetName(),
 					}},
 				}
 			}),
+			// The predicate filters which Namespace events should trigger a reconciliation.
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
-				// `obj` is a Namespace.
-				// Only trigger if the namespace is relevant to our logic.
+				// This single function now acts as the gatekeeper for all events.
 				labels := obj.GetLabels()
-				// Trigger if team is unknown AND it's not yet flagged yellow (or whatever our initial target flag is)
-				if labels[TeamLabelKey] == TeamUnknown && labels[FlagLabelKey] != FlagYellow {
+
+				// If an object (like openshift ns) has no labels or doesn't have our specific labels,
+				// it will fail both checks below and be ignored.
+				if labels == nil {
+					return false
+				}
+
+				// Reconcile if the namespace is marked "unknown".
+				// This handles the main lifecycle management (Create, and transitions "" -> yellow -> red).
+				if labels[TeamLabelKey] == TeamUnknown {
 					return true
 				}
-				// Or trigger if it has our team label and has one of our flags (for state transitions or cleanup)
-				// For the initial goal, this might be too broad, but good for future expansion.
-				// if labels[TeamLabelKey] == TeamUnknown && labels[FlagLabelKey] != "" {
-				// return true
-				// }
+
+				// Reconcile if the namespace has one of our lifecycle flags.
+				// This is crucial for the cleanup logic: when team changes from "unknown" to something else,
+				// this check ensures we still process the event so we can remove the flag.
+				if _, ok := labels[FlagLabelKey]; ok {
+					return true
+				}
+
+				// If neither condition is met, it's not a namespace we care about.
 				return false
 			})),
 		).
