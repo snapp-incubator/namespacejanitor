@@ -72,22 +72,23 @@ var _ = BeforeSuite(func() {
 	}
 
 	var err error
-	// cfg is defined in this file globally.
+	// cfg is defined in this file globally. Downloads local etcd and local kube-apiserver
 	cfg, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
-
+	// Install CRDs into the fake API server
 	err = snappcloudv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
-
+	// Create a Kubernetes client
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
 })
 
+// Shuts down etcd and kube-apiserver
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()

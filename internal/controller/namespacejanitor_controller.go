@@ -45,7 +45,9 @@ const (
 	FlagLabelKey           = "snappcloud.io/flag"
 	TeamLabelKey           = "snappcloud.io/team"
 	RequesterAnnotationKey = "snappcloud.io/requester"
+)
 
+var (
 	YellowThreshold = time.Minute * 2 //production >> 7 * 24 * time.Hour
 	RedThreshold    = time.Minute * 4 //production >> 14 * 24 * time.Hour
 	DeleteThreshold = time.Minute * 6 //production >> 16 * 24 * time.Hour
