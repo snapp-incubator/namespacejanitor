@@ -45,15 +45,12 @@ const (
 	FlagLabelKey           = "snappcloud.io/flag"
 	TeamLabelKey           = "snappcloud.io/team"
 	RequesterAnnotationKey = "snappcloud.io/requester"
+)
 
+var (
 	YellowThreshold = time.Minute * 2 //production >> 7 * 24 * time.Hour
 	RedThreshold    = time.Minute * 4 //production >> 14 * 24 * time.Hour
 	DeleteThreshold = time.Minute * 6 //production >> 16 * 24 * time.Hour
-
-	// Default name for the NamespaceJanitor CR if users create one.
-	// The watch on Namespaces will enqueue a request for a CR with this name
-	// in the namespace that changed.
-	DefaultJanitorCRName = "default-janitor-config"
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
@@ -93,20 +90,19 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	var janitorCR snappcloudv1alpha1.NamespaceJanitor
 	if err := r.Get(ctx, req.NamespacedName, &janitorCR); err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("NamespaceJanitor CR not found. Creating a default one.", "namespace", namespaceName)
 			var nsForCheck corev1.Namespace
 			if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &nsForCheck); err != nil {
 				logger.Info("Parent namespace not found while attempting to create default CR. Assuming it was deleted.", "namespace", namespaceName)
-				return ctrl.Result{}, err
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
 			if !nsForCheck.ObjectMeta.DeletionTimestamp.IsZero() {
 				logger.Info("Parent namespace is terminating. Skipping creation of default CR.", "namespace", namespaceName)
-				return ctrl.Result{}, nil // Stop. Do not attempt to create anything.
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 
 			}
 			if !isRelevent(&nsForCheck) {
 				logger.Info("Namespace is no longer relevant. Skipping creation of default CR.", "namespace", namespaceName)
-				return ctrl.Result{}, nil
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
 
 			// Create the default CR
@@ -139,7 +135,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			logger.Info("Target Namespace for this reconciliation cycle not found. It might have been deleted.", "namespace", namespaceName)
 			// If the NamespaceJanitor CR still exist but its Namespace is gone,
 			// we might have to clean up the CR or update its status. For Now, we just stop.
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 		logger.Error(err, "failed to get target Namespace", "namespace", namespaceName)
 		return ctrl.Result{}, client.IgnoreNotFound(err)

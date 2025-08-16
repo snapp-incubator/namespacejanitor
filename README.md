@@ -15,30 +15,24 @@ The Namespace Janitor operator monitors newly created namespaces with `snappclou
 - **14 days after creation**: If still `unknown` and `yellow`, update to `snappcloud.io/flag: red` and send updated notification.
 - **16 days after creation**: If still `unknown` and `red`, delete the namespace and send final notification.
 
-### User Quota Management
-- Limits users to creating a maximum of 3 namespaces with the `unknown` label simultaneously.
-- The quota check occurs during namespace creation.
-
 
 ### Core Components
 
 #### 1. Namespace Controller
 - Watches namespace events.
-- Watches namespace CR
+- Create and watch namespace CRD
 - Manages lifecycle timers using `creationTimestamp` and `RequeueAfter`.
 - Updates namespace labels/annotations for state persistence.
 - Interacts with a message broker for notifications.
 
 #### 2. Validating Admission Webhook
 - Intercepts namespace `CREATE` requests.
-- Enforces the 3-namespace quota per user by querying existing `unknown` namespaces.
-- Admits or denies requests based on quota availability.
 
 #### 3. Namespace Policy CRD
 - Custom Resource Definition (`CRD`) for declarative policy configuration.
 - Fields include:
   - `additionalRecipients` for notification targets.
-  - `deletationTimeExtend` for custom deletion timing.
+  - `deletionTimeExtend` for custom deletion timing.
 
 
 ### Namespace Policy CRD
@@ -55,3 +49,4 @@ spec:
     - "test@example.com"
     - "test2@example.com"
   deletionTimeExtend: 30 # days
+```
