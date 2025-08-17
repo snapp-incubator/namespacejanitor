@@ -48,9 +48,9 @@ const (
 )
 
 var (
-	YellowThreshold = time.Minute * 2 //production >> 7 * 24 * time.Hour
-	RedThreshold    = time.Minute * 4 //production >> 14 * 24 * time.Hour
-	DeleteThreshold = time.Minute * 6 //production >> 16 * 24 * time.Hour
+	YellowThreshold = 1 * 24 * time.Hour //stage >> time.Minute * 1 //production >> 7 * 24 * time.Hour
+	RedThreshold    = 3 * 24 * time.Hour //stage >> time.Minute * 5 //production >> 14 * 24 * time.Hour
+	DeleteThreshold = 4 * 24 * time.Hour //stage >> time.Minute * 8 //production >> 16 * 24 * time.Hour
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
@@ -148,14 +148,12 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if ns.Labels[TeamLabelKey] != TeamUnknown {
-		// Call the simplified cleanup function.
 		if err := r.cleanupClaimedNamespace(ctx, &ns, &janitorCR, logger); err != nil {
 			return ctrl.Result{RequeueAfter: time.Minute}, err
 		}
 		return ctrl.Result{}, nil
 	}
 
-	// --- core Logic: Check and flag the namespace ---
 	currentTeamLabel := ns.Labels[TeamLabelKey]
 	currentFlagLabel := ns.Labels[FlagLabelKey]
 	age := time.Since(ns.CreationTimestamp.Time)
@@ -239,7 +237,7 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 	}, logger)
 
 	// Update the CR status if it exists
-	if janitorCR.UID != "" { // A reliable way to check if the CR object is real
+	if janitorCR.UID != "" {
 		janitorCR.Status.LastFlagApplied = flag
 		janitorCR.Status.Conditions = []metav1.Condition{
 			{Type: "Managed", Status: metav1.ConditionTrue, Reason: action, Message: fmt.Sprintf("Flag %s applied.", flag), LastTransitionTime: metav1.Now()},
@@ -276,19 +274,19 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 
 	// Now, update the status on the NamespaceJanitor CR to reflect it's no longer managing.
 	statusPatch := client.MergeFrom(janitorCR.DeepCopy())
-	janitorCR.Status.LastFlagApplied = "CleanedUp" // Or an empty string ""
+	janitorCR.Status.LastFlagApplied = "CleanedUp"
+	Message := "Namespace has been claimed by team " + ns.Labels[TeamLabelKey] + " so lifecycle management is complete"
 	janitorCR.Status.Conditions = []metav1.Condition{
 		{
 			Type:               "Managed",
 			Status:             metav1.ConditionFalse,
 			Reason:             "TeamClaimed",
-			Message:            "Namespace has been claimed by a team; lifecycle management is complete.",
+			Message:            Message,
 			LastTransitionTime: metav1.Now(),
 		},
 	}
 	if err := r.Status().Patch(ctx, janitorCR, statusPatch); err != nil {
 		logger.Error(err, "Failed to update NamespaceJanitor status after cleanup")
-		// Don't fail the whole operation for a status update error, but log it.
 	}
 
 	return nil
@@ -318,9 +316,8 @@ func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Contex
 	return nil
 }
 
-// sendNotification is a placeholder for actual notification logic
 func (r *NamespaceJanitorReconciler) sendNotification(ctx context.Context, notification EventNotification, logger logr.Logger) {
-	// In a real implementation, this would integrate with an email service, Slack, etc.
+	// In a real implementation, we request to NotificationCenter
 	logger.Info("Sending notification",
 		"namespace", notification.NamespaceName,
 		"action", notification.ActionTaken,
