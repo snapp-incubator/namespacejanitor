@@ -48,9 +48,9 @@ const (
 )
 
 var (
-	YellowThreshold = time.Minute * 1 //production >> 7 * 24 * time.Hour
-	RedThreshold    = time.Minute * 5 //production >> 14 * 24 * time.Hour
-	DeleteThreshold = time.Minute * 8 //production >> 16 * 24 * time.Hour
+	YellowThreshold = 1 * 24 * time.Hour //stage >> time.Minute * 1 //production >> 7 * 24 * time.Hour
+	RedThreshold    = 3 * 24 * time.Hour //stage >> time.Minute * 5 //production >> 14 * 24 * time.Hour
+	DeleteThreshold = 4 * 24 * time.Hour //stage >> time.Minute * 8 //production >> 16 * 24 * time.Hour
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
