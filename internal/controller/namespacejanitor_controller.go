@@ -48,9 +48,9 @@ const (
 )
 
 var (
-	YellowThreshold = 1 * 24 * time.Hour //stage >> time.Minute * 1 //production >> 7 * 24 * time.Hour
-	RedThreshold    = 3 * 24 * time.Hour //stage >> time.Minute * 5 //production >> 14 * 24 * time.Hour
-	DeleteThreshold = 4 * 24 * time.Hour //stage >> time.Minute * 8 //production >> 16 * 24 * time.Hour
+	YellowThreshold = 1 * 24 * time.Hour //stage >> time.Minute * 1 production >> 7 * 24 * time.Hour
+	RedThreshold    = 3 * 24 * time.Hour //stage >> time.Minute * 5 production >> 14 * 24 * time.Hour
+	DeleteThreshold = 4 * 24 * time.Hour //stage >> time.Minute * 8 production >> 16 * 24 * time.Hour
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
@@ -227,7 +227,7 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 		return err
 	}
 
-	r.sendNotification(ctx, EventNotification{
+	r.sendNotification(EventNotification{
 		NamespaceName:        ns.Name,
 		CurrentFlag:          flag,
 		ActionTaken:          action,
@@ -294,7 +294,7 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 
 func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
 	logger.Info("Final notification before namespace deletion", "namespace", ns.Name)
-	r.sendNotification(ctx, EventNotification{
+	r.sendNotification(EventNotification{
 		NamespaceName:        ns.Name,
 		CurrentFlag:          FlagRed,
 		ActionTaken:          "DeletingNamespace",
@@ -316,7 +316,7 @@ func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Contex
 	return nil
 }
 
-func (r *NamespaceJanitorReconciler) sendNotification(ctx context.Context, notification EventNotification, logger logr.Logger) {
+func (r *NamespaceJanitorReconciler) sendNotification(notification EventNotification, logger logr.Logger) {
 	// In a real implementation, we request to NotificationCenter
 	logger.Info("Sending notification",
 		"namespace", notification.NamespaceName,
