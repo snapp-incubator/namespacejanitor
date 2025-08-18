@@ -5,6 +5,10 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: namespacejanitor
     app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/instance: system
+    app.kubernetes.io/component: manager
+    app.kubernetes.io/created-by: namespacejanitor
+    app.kubernetes.io/part-of: namespacejanitor
   name: system
 ---
 apiVersion: apps/v1
@@ -16,6 +20,10 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: namespacejanitor
     app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/instance: system
+    app.kubernetes.io/component: manager
+    app.kubernetes.io/created-by: namespacejanitor
+    app.kubernetes.io/part-of: namespacejanitor
 spec:
   selector:
     matchLabels:
@@ -48,8 +56,8 @@ spec:
       #             operator: In
       #             values:
       #               - linux
-      securityContext:
-        runAsNonRoot: true
+      #securityContext:
+      #  runAsNonRoot: true
         # TODO(user): For common cases that do not require escalating privileges
         # it is recommended to ensure that all your Pods/Containers are restrictive.
         # More info: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
@@ -63,13 +71,13 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+        image: ghcr.io/snapp-incubator/namespacejanitor:v1.0.0
         name: manager
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - "ALL"
+#        securityContext:
+#          allowPrivilegeEscalation: false
+#          capabilities:
+#            drop:
+#            - "ALL"
         livenessProbe:
           httpGet:
             path: /healthz
