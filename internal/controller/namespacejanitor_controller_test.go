@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	snappcloudv1alpha1 "github.com/rezacloner1372/namespacejanitor.git/api/v1alpha1"
+	snappcloudv1alpha1 "github.com/snapp-incubator/namespacejanitor/api/v1alpha1"
 )
 
 var _ = Describe("NamespaceJanitor Controller", func() {

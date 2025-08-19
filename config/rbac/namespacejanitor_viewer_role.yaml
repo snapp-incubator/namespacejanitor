@@ -8,7 +8,7 @@ metadata:
   name: namespacejanitor-viewer-role
 rules:
 - apiGroups:
-  - snappcloud.snappcloud.io
+  - namespacejanitor.snappcloud.io
   resources:
   - namespacejanitors
   verbs:
@@ -16,7 +16,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - snappcloud.snappcloud.io
+  - namespacejanitor.snappcloud.io
   resources:
   - namespacejanitors/status
   verbs:
