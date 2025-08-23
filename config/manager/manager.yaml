@@ -15,7 +15,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: controller-manager
-  namespace: system
+  namespace: namespacejanitor-operator-system
   labels:
     control-plane: controller-manager
     app.kubernetes.io/name: namespacejanitor
@@ -28,7 +28,7 @@ spec:
   selector:
     matchLabels:
       control-plane: controller-manager
-  replicas: 1
+  replicas: 3
   template:
     metadata:
       annotations:
@@ -70,7 +70,7 @@ spec:
         - /manager
         args:
           - --leader-elect
-          - --health-probe-bind-address=:8081
+          - --health-probe-bind-address=0.0.0.0:8081
         image: ghcr.io/snapp-incubator/namespacejanitor:v1.0.0
         name: manager
 #        securityContext:
@@ -82,13 +82,13 @@ spec:
           httpGet:
             path: /healthz
             port: 8081
-          initialDelaySeconds: 15
+          initialDelaySeconds: 20
           periodSeconds: 20
         readinessProbe:
           httpGet:
             path: /readyz
             port: 8081
-          initialDelaySeconds: 5
+          initialDelaySeconds: 30
           periodSeconds: 10
         # TODO(user): Configure the resources accordingly based on the project requirements.
         # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/

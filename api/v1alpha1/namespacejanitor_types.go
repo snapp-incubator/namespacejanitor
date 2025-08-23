@@ -47,7 +47,7 @@ type NamespaceJanitorStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-//+kubebuilder:resource:scope=Namespaced,shortName=nsj;nsjanitor
+// +kubebuilder:resource:scope=Namespaced,shortName=nsj;nsjanitor
 // NamespaceJanitor is the Schema for the namespacejanitors API
 
 // NamespaceJanitor is the Schema for the namespacejanitors API

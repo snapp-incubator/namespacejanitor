@@ -37,7 +37,7 @@ The Namespace Janitor operator monitors newly created namespaces with `snappclou
 
 ### Namespace Policy CRD
 ```yaml  
-apiVersion: snappcloud.snappcloud.io/v1alpha1
+apiVersion: namespacejanitor.snappcloud.io/v1alpha1
 kind: NamespaceJanitor
 metadata:
   labels:

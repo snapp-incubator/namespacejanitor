@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	snappcloudv1alpha1 "github.com/rezacloner1372/namespacejanitor.git/api/v1alpha1"
+	snappcloudv1alpha1 "github.com/snapp-incubator/namespacejanitor/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

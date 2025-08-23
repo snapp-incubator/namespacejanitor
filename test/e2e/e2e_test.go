@@ -24,7 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/rezacloner1372/namespacejanitor.git/test/utils"
+	"github.com/snapp-incubator/namespacejanitor/test/utils"
 )
 
 const namespace = "namespacejanitor-system"
