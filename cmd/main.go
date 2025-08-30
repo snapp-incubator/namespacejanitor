@@ -35,9 +35,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	snappcloudv1alpha1 "github.com/rezacloner1372/namespacejanitor.git/api/v1alpha1"
-	"github.com/rezacloner1372/namespacejanitor.git/internal/controller"
-	// +kubebuilder:scaffold:imports
+	snappcloudv1alpha1 "github.com/snapp-incubator/namespacejanitor/api/v1alpha1"
+	"github.com/snapp-incubator/namespacejanitor/internal/controller"
+	// +kubebuilder:scaffold:impo
 )
 
 var (

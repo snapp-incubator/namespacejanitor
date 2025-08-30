@@ -4,6 +4,10 @@ metadata:
   labels:
     app.kubernetes.io/name: namespacejanitor
     app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/instance: system
+    app.kubernetes.io/component: manager
+    app.kubernetes.io/created-by: namespacejanitor
+    app.kubernetes.io/part-of: namespacejanitor
   name: leader-election-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -12,4 +16,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: controller-manager
-  namespace: system
+  namespace: namespacejanitor-operator-system

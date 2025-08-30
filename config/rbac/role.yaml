@@ -16,7 +16,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - snappcloud.snappcloud.io
+  - namespacejanitor.snappcloud.io
   resources:
   - namespacejanitors
   verbs:
@@ -28,13 +28,13 @@ rules:
   - update
   - watch
 - apiGroups:
-  - snappcloud.snappcloud.io
+  - namespacejanitor.snappcloud.io
   resources:
   - namespacejanitors/finalizers
   verbs:
   - update
 - apiGroups:
-  - snappcloud.snappcloud.io
+  - namespacejanitor.snappcloud.io
   resources:
   - namespacejanitors/status
   verbs:
