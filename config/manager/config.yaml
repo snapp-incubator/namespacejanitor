@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: namespacejanitor-thresholds
+  namespace: namespacejanitor-operator-system
+data:
+  yellow-threshold: "1m"
+  red-threshold: "3m"
+  delete-threshold: "4m"
