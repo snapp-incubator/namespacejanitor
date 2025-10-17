@@ -50,3 +50,9 @@ spec:
     - "test2@example.com"
   deletionTimeExtend: 30 # days
 ```
+
+
+TODO:
+- Add severity levels for flags.
+- Move Flag Threshold to config map.
+- Send notifications for "Namespace has been claimed by a team".
