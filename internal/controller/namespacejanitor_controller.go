@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snapp-incubator/namespacejanitor/internal/notification"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,26 +55,29 @@ var (
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
-type EventNotification struct {
-	NamespaceName        string    `json:"namespace"`
-	CurrentFlag          string    `json:"currentFlag"`
-	ActionTaken          string    `json:"actionTaken"`
-	Age                  string    `json:"age"`
-	CreationTimestamp    time.Time `json:"creationTimestamp"`
-	Requester            string    `json:"requester"`
-	AdditionalRecipients []string  `json:"additionalRecipients"`
-}
+//type EventNotification struct {
+//	NamespaceName        string    `json:"namespace"`
+//	CurrentFlag          string    `json:"currentFlag"`
+//	ActionTaken          string    `json:"actionTaken"`
+//	Age                  string    `json:"age"`
+//	CreationTimestamp    time.Time `json:"creationTimestamp"`
+//	Requester            string    `json:"requester"`
+//	AdditionalRecipients []string  `json:"additionalRecipients"`
+//}
 
 // NamespaceJanitorReconciler reconciles a NamespaceJanitor object
 type NamespaceJanitorReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Notifier notification.Notifier
 }
 
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+
 func janitorCRName(namespaceName string) string {
 	return fmt.Sprintf("%s-janitor", namespaceName)
 }
@@ -211,7 +215,6 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, flag string, logger logr.Logger) error {
 	action := fmt.Sprintf("Applied%sFlag", flag)
-	// Idempotenty check: Dont do anything if the label is already correct.
 	if ns.Labels[FlagLabelKey] == flag {
 		logger.Info("Namespace already has the correct flag label.", "namespace", ns.Name, "flag", flag)
 		return nil
@@ -227,7 +230,7 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 		return err
 	}
 
-	r.sendNotification(EventNotification{
+	r.sendNotification(ctx, notification.JanitorPayload{
 		NamespaceName:        ns.Name,
 		CurrentFlag:          flag,
 		ActionTaken:          action,
@@ -261,6 +264,15 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 	}
 
 	logger.Info("Namespace has been claimed by a team. Cleaning up flag label.", "namespace", ns.Name, "team", ns.Labels[TeamLabelKey])
+	currentFlag := ns.Labels[FlagLabelKey]
+	r.sendNotification(ctx, notification.JanitorPayload{
+		NamespaceName:        ns.Name,
+		CurrentFlag:          currentFlag,
+		ActionTaken:          "NamespaceClaimed",
+		Age:                  time.Since(ns.CreationTimestamp.Time).String(),
+		Requester:            ns.Annotations[RequesterAnnotationKey],
+		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+	}, logger)
 
 	// Use a patch to remove the label from the namespace.
 	patch := client.MergeFrom(ns.DeepCopy())
@@ -294,7 +306,7 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 
 func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
 	logger.Info("Final notification before namespace deletion", "namespace", ns.Name)
-	r.sendNotification(EventNotification{
+	r.sendNotification(ctx, notification.JanitorPayload{
 		NamespaceName:        ns.Name,
 		CurrentFlag:          FlagRed,
 		ActionTaken:          "DeletingNamespace",
@@ -316,16 +328,21 @@ func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Contex
 	return nil
 }
 
-func (r *NamespaceJanitorReconciler) sendNotification(notification EventNotification, logger logr.Logger) {
-	// In a real implementation, we request to NotificationCenter
-	logger.Info("Sending notification",
-		"namespace", notification.NamespaceName,
-		"action", notification.ActionTaken,
-		"flag", notification.CurrentFlag,
-		"age", notification.Age,
-		"requester", notification.Requester,
-		"recipients", notification.AdditionalRecipients)
-	// TODO: Implement actual notification sending
+func (r *NamespaceJanitorReconciler) sendNotification(ctx context.Context, payload notification.JanitorPayload, logger logr.Logger) {
+	if r.Notifier == nil {
+		logger.Info("Notifier is not configured, skipping notification.", "namespace", payload.NamespaceName)
+		return
+	}
+
+	logger.Info("Requesting to send notification",
+		"namespace", payload.NamespaceName,
+		"action", payload.ActionTaken,
+		"flag", payload.CurrentFlag,
+	)
+
+	if err := r.Notifier.Send(ctx, payload); err != nil {
+		logger.Error(err, "Failed to send notification")
+	}
 }
 
 func isRelevent(obj client.Object) bool {
