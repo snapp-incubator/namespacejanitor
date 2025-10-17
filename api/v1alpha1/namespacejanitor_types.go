@@ -26,7 +26,6 @@ type NamespaceJanitorSpec struct {
 	// about lifecycle events for the namespace.
 	// +optional
 	AdditionalRecipients []string `json:"additionalRecipients,omitempty"`
-	// TODO(Extend Deletion Threshold)
 }
 
 // NamespaceJanitorStatus defines the observed state of NamespaceJanitor
