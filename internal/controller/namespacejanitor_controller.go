@@ -54,17 +54,6 @@ var (
 	DeleteThreshold = 4 * time.Minute //stage >> time.Minute * 8 production >> 16 * 24 * time.Hour
 )
 
-// EventNotification is a struct that represents a notification event(can be expanded)
-//type EventNotification struct {
-//	NamespaceName        string    `json:"namespace"`
-//	CurrentFlag          string    `json:"currentFlag"`
-//	ActionTaken          string    `json:"actionTaken"`
-//	Age                  string    `json:"age"`
-//	CreationTimestamp    time.Time `json:"creationTimestamp"`
-//	Requester            string    `json:"requester"`
-//	AdditionalRecipients []string  `json:"additionalRecipients"`
-//}
-
 // NamespaceJanitorReconciler reconciles a NamespaceJanitor object
 type NamespaceJanitorReconciler struct {
 	client.Client
