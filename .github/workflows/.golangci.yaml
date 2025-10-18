@@ -20,5 +20,4 @@ linters-settings:
       - "-ST1001"
 
 output:
-  formats:
-    colored-line-number: {}
+  format: colored-line-number

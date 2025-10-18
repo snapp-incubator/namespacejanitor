@@ -34,7 +34,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.59.1
+          version: v2.4.0
           args: >
             --config=.github/workflows/.golangci.yaml
         env:
