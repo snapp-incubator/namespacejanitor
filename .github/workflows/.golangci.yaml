@@ -16,5 +16,6 @@ issues:
     - "_test\\.go$"
     - "test/utils/.*"
     - ".*/mocks/.*"
+  exclude-use-default: false
   exclude-patterns:
     - "gitlab\\.snapp\\.ir/.*"
