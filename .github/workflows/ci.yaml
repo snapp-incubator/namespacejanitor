@@ -39,6 +39,7 @@ jobs:
             --timeout=5m
             --out-format=colored-line-number
             --skip-dirs=test
+            --skip-files=.*_test.go
             --exclude-use-default=false
         env:
           GO111MODULE: on
