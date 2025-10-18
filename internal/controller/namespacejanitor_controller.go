@@ -88,7 +88,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				logger.Info("Parent namespace not found while attempting to create default CR. Assuming it was deleted.", "namespace", namespaceName)
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
-			if !nsForCheck.ObjectMeta.DeletionTimestamp.IsZero() {
+			if !nsForCheck.DeletionTimestamp.IsZero() {
 				logger.Info("Parent namespace is terminating. Skipping creation of default CR.", "namespace", namespaceName)
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 
@@ -135,7 +135,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// Check if namespace is being deleted
-	if !ns.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !ns.DeletionTimestamp.IsZero() {
 		logger.Info("Namespace is already in a terminating state. No action needed.", "namespace", ns.Name)
 		return ctrl.Result{}, nil
 	}

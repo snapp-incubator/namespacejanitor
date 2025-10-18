@@ -36,11 +36,7 @@ jobs:
         with:
           version: v1.59.1
           args: >
-            --timeout=5m
-            --out-format=colored-line-number
-            --skip-dirs=test
-            --skip-files=.*_test.go
-            --exclude-use-default=false
+            --config=.golangci.yaml
         env:
           GO111MODULE: on
 
