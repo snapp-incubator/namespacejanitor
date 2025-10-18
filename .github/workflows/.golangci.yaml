@@ -1,6 +1,20 @@
+version: 2
+
 linters:
   enable:
     - staticcheck
 
 run:
   timeout: 5m
+  skip-dirs:
+    - test
+
+issues:
+  exclude-dirs:
+    - ^test$
+  exclude-files:
+    - "_test\\.go$"
+    - "test/utils/.*"
+    - ".*/mocks/.*"
+  exclude-patterns:
+    - "gitlab\\.snapp\\.ir/.*"
