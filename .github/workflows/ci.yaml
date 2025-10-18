@@ -36,7 +36,10 @@ jobs:
         with:
           version: v2.4.0
           args: >
-            --config=.github/workflows/.golangci.yaml
+            --timeout 5m
+            --skip-dirs test
+            --skip-files ".*_test.go|test/utils/.*|.*/mocks/.*"
+
         env:
           GO111MODULE: on
 

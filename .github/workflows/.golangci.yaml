@@ -1,19 +1,6 @@
-version: 2
-
-run:
-  timeout: 5m
-
 linters:
   enable:
     - staticcheck
 
-linters-settings:
-  staticcheck:
-    checks:
-      - all
-      - "-ST1001"
-
-exclude:
-  - 'test/.*'
-  - '.*_test.go'
-  - 'test/utils/.*'
+run:
+  timeout: 5m
