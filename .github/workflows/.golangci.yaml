@@ -1,19 +1,11 @@
-version: "2"
+version: 2
 
 run:
   timeout: 5m
 
-issues:
-  exclude-dirs:
-    - ^test$
-  exclude-files:
-    - "_test\\.go$"
-    - "test/utils/utils\\.go$"
-  exclude-rules:
-    - linters:
-        - staticcheck
-      text: "ST1001"
-      path: "test/utils/utils\\.go"
+linters:
+  enable:
+    - staticcheck
 
 linters-settings:
   staticcheck:
@@ -21,5 +13,7 @@ linters-settings:
       - all
       - "-ST1001"
 
-output:
-  format: colored-line-number
+exclude:
+  - 'test/.*'
+  - '.*_test.go'
+  - 'test/utils/.*'
