@@ -29,7 +29,7 @@ jobs:
         - name: Run golangci-lint
           uses: golangci/golangci-lint-action@v9
           with:
-            args: --timeout=2m --disable=typecheck
+            args: --timeout=2m
 
     docker:
       name: docker
