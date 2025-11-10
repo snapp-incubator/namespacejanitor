@@ -20,6 +20,10 @@ jobs:
           with:
             go-version: '1.25'
 
+        - name: Configure Git credentials for private packages
+          run: |
+            git config --global url."https://${{ secrets.GITLAB_TOKEN }}@gitlab.snapp.ir/"
+
         - name: Run golangci-lint
           uses: golangci/golangci-lint-action@v9
           with:
