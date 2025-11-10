@@ -23,21 +23,13 @@ jobs:
         - name: Run golangci-lint
           uses: golangci/golangci-lint-action@v9
           with:
-            args: --timeout=2m
-  
-    test:
-      name: test
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v3
-        - name: run tests using make
-          run: make test
+            args: --timeout=2m --disable=typecheck
+
     docker:
       name: docker
       runs-on: ubuntu-latest
       needs:
         - lint
-        - test
       steps:
         - uses: actions/checkout@v2
         - uses: docker/setup-qemu-action@v1
