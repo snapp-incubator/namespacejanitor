@@ -2,18 +2,23 @@
 FROM golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+ARG GITLAB_TOKEN
 
 WORKDIR /workspace
+
+RUN git config --global url."https://${GITLAB_TOKEN}@gitlab.snapp.ir/".insteadOf "https://gitlab.snapp.ir/"
+
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
+RUN go mod download
 
 # Copy the go source
-COPY cmd/ cmd/
+COPY cmd/main.go cmd/main.go
 COPY api/ api/
-COPY internal/ internal/
+COPY internal/controller/ internal/controller/
 
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command
