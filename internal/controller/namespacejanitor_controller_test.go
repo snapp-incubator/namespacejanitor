@@ -86,7 +86,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			By("Running the reconciliation loop")
 			result, err := controllerReconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter > 0).To(BeFalse())
+			Expect(result.RequeueAfter).To(Equal(time.Second))
 
 			By("Verifying that the default NamespaceJanitor CR was created")
 			createdCR := &snappcloudv1alpha1.NamespaceJanitor{}

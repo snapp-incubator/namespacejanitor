@@ -71,13 +71,10 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=0.0.0.0:8081
-        image: ghcr.io/snapp-incubator/namespacejanitor:v1.0.0
+          - --kafka-topic=notifications
+          - --kafka-broker=kafka-service.snappcloud-kafka.svc.cluster.local:9092
+        image: ghcr.io/snapp-incubator/namespacejanitor:v1.0.4
         name: manager
-#        securityContext:
-#          allowPrivilegeEscalation: false
-#          capabilities:
-#            drop:
-#            - "ALL"
         livenessProbe:
           httpGet:
             path: /healthz
