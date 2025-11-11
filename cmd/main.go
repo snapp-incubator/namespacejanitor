@@ -21,10 +21,12 @@ import (
 	"flag"
 	"os"
 
+	"github.com/snapp-incubator/namespacejanitor/internal/notification"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	nativezap "go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -37,6 +39,7 @@ import (
 
 	snappcloudv1alpha1 "github.com/snapp-incubator/namespacejanitor/api/v1alpha1"
 	"github.com/snapp-incubator/namespacejanitor/internal/controller"
+	"gitlab.snapp.ir/platform/cloudgoutils/pkg/eventbus"
 	// +kubebuilder:scaffold:impo
 )
 
@@ -59,6 +62,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	var kafkaBroker, kafkaTopic, kafkaGroup string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -69,6 +73,10 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&kafkaBroker, "kafka-broker", "", "The Kafka broker address for notifications")
+	flag.StringVar(&kafkaTopic, "kafka-topic", "namespace-janitor-notifications", "The Kafka topic for notifications")
+	flag.StringVar(&kafkaGroup, "kafka-group", "namespace-janitor-group", "The Kafka consumer group for notifications")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -144,9 +152,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	notifierLog := ctrl.Log.WithName("notifier")
+	kafkaCfg := eventbus.KafkaConfig{
+		Broker: kafkaBroker,
+		Topic:  kafkaTopic,
+		Group:  kafkaGroup,
+	}
+	zapLogger, err := nativezap.NewProduction()
+	if err != nil {
+		setupLog.Error(err, "unable to create zap logger for eventbus")
+		os.Exit(1)
+	}
+
+	notifier, err := notification.New(kafkaCfg, zapLogger, notifierLog)
+	if err != nil {
+		setupLog.Error(err, "unable to setup notifier")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := notifier.Close(); err != nil {
+			setupLog.Error(err, "failed to close notifier connections")
+		}
+	}()
 	if err = (&controller.NamespaceJanitorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Notifier: notifier,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NamespaceJanitor")
 		os.Exit(1)
