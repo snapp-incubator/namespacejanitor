@@ -43,7 +43,7 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=0.0.0.0:8081
           - --config=/etc/namespacejanitor/config.yaml
-        image: ghcr.io/snapp-incubator/namespacejanitor:v1.0.4
+        image: ghcr.io/snapp-incubator/namespacejanitor:1.1.0
         name: manager
         livenessProbe:
           httpGet:
@@ -65,10 +65,10 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
-          volumeMounts:
-            - name: config
-              mountPath: /etc/namespacejanitor
-              readOnly: true
+        volumeMounts:
+          - name: config
+            mountPath: /etc/namespacejanitor
+            readOnly: true
       volumes:
         - name: config
           configMap:
