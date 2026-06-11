@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: namespacejanitor-config
+  namespace: namespacejanitor-operator-system
+data:
+  config.yaml: |
+    lifecycle:
+      creationNotification: true
+      yellowThreshold: "72h"
+      redThreshold: "336h"
+      finalWarningThreshold: "720h"
+      deleteThreshold: "816h"
+    notifications:
+      mattermost:
+        webhook: ""
+      kafka:
+        broker: ""
+        topic: "namespace-janitor-notifications"
+        group: "namespace-janitor-group"
