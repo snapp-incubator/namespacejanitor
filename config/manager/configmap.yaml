@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: namespacejanitor-config
+  name: config
   namespace: namespacejanitor-operator-system
 data:
   config.yaml: |
@@ -13,7 +13,7 @@ data:
       deleteThreshold: "816h"
     notifications:
       mattermost:
-        webhook: ""
+        webhook: "https://chat.snapp.services/hooks/4wx3ya77ojyt78hpgchbofo43a"
       kafka:
         broker: ""
         topic: "namespace-janitor-notifications"
