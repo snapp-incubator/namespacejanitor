@@ -1,0 +1,13 @@
+lifecycle:
+  creationNotification: true
+  yellowThreshold: "2s"
+  redThreshold: "4s"
+  finalWarningThreshold: "6s"
+  deleteThreshold: "8s"
+notifications:
+  mattermost:
+    webhook: ""
+  kafka:
+    broker: ""
+    topic: ""
+    group: ""

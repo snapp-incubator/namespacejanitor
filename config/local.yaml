@@ -1,0 +1,13 @@
+lifecycle:
+  creationNotification: true
+  yellowThreshold: "2m"
+  redThreshold: "5m"
+  finalWarningThreshold: "7m"
+  deleteThreshold: "9m"
+notifications:
+  mattermost:
+    webhook: "https://chat.snapp.services/hooks/4wx3ya77ojyt78hpgchbofo43a"
+  kafka:
+    broker: ""
+    topic: ""
+    group: ""
