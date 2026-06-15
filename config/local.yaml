@@ -4,6 +4,17 @@ lifecycle:
   redThreshold: "5m"
   finalWarningThreshold: "7m"
   deleteThreshold: "9m"
+  excludeNamespaces:
+    - "^openshift-.*"
+    - "^kube-.*"
+    - "^default$"
+    - "^kube-public$"
+    - "^kube-node-lease$"
+    - "^snappcloud-.*"
+    - ".*-operator-system$"
+    - "^argocd$"
+    - "^monitoring$"
+    - "^cert-manager$"
 notifications:
   mattermost:
     webhook: "https://chat.snapp.services/hooks/4wx3ya77ojyt78hpgchbofo43a"

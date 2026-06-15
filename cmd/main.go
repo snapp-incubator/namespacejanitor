@@ -192,11 +192,20 @@ func main() {
 		}()
 	}
 
+	// Build namespace excluder from config
+	excluder, err := controller.NewNamespaceExcluder(operatorCfg.Lifecycle.ExcludeNamespaces)
+	if err != nil {
+		setupLog.Error(err, "unable to compile namespace exclusion patterns")
+		os.Exit(1)
+	}
+	setupLog.Info("Namespace exclusion patterns loaded", "count", len(operatorCfg.Lifecycle.ExcludeNamespaces))
+
 	if err = (&controller.NamespaceJanitorReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Notifier: notifier,
 		Config:   operatorCfg.Lifecycle,
+		Excluder: excluder,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NamespaceJanitor")
 		os.Exit(1)

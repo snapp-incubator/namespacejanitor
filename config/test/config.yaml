@@ -4,6 +4,9 @@ lifecycle:
   redThreshold: "4s"
   finalWarningThreshold: "6s"
   deleteThreshold: "8s"
+  excludeNamespaces:
+    - "^kube-.*"
+    - "^default$"
 notifications:
   mattermost:
     webhook: ""

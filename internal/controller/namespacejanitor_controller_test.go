@@ -28,6 +28,11 @@ func testConfig() LifecycleConfig {
 	return cfg.Lifecycle
 }
 
+func testExcluder() *NamespaceExcluder {
+	ex, _ := NewNamespaceExcluder(testConfig().ExcludeNamespaces)
+	return ex
+}
+
 var _ = Describe("NamespaceJanitor Controller", func() {
 
 	Context("when a relevant Namespace is created", func() {
@@ -62,9 +67,10 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 
 		It("should create a default NamespaceJanitor CR inside it", func() {
 			controllerReconciler := &NamespaceJanitorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Config: testConfig(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Config:   testConfig(),
+				Excluder: testExcluder(),
 			}
 			req := reconcile.Request{
 				NamespacedName: types.NamespacedName{
@@ -99,9 +105,10 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			controllerReconciler = &NamespaceJanitorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Config: testConfig(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Config:   testConfig(),
+				Excluder: testExcluder(),
 			}
 		})
 
@@ -273,9 +280,10 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 
 		It("should remove the flag label and update the CR status", func() {
 			controllerReconciler := &NamespaceJanitorReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Config: testConfig(),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Config:   testConfig(),
+				Excluder: testExcluder(),
 			}
 			req := reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
@@ -324,6 +332,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 				Scheme:   k8sClient.Scheme(),
 				Notifier: mockNotifier,
 				Config:   testConfig(),
+				Excluder: testExcluder(),
 			}
 		})
 
