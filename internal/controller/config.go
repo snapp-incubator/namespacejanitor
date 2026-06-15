@@ -3,11 +3,11 @@ package controller
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 )
-
 
 type OperatorConfig struct {
 	Lifecycle     LifecycleConfig    `yaml:"lifecycle"`
@@ -17,11 +17,12 @@ type OperatorConfig struct {
 // LifecycleConfig holds all timing thresholds for the namespace lifecycle.
 // Durations are specified as Go duration strings (e.g., "72h", "336h", "2s").
 type LifecycleConfig struct {
-	CreationNotification bool `yaml:"creationNotification"`
-	YellowThreshold Duration `yaml:"yellowThreshold"`
-	RedThreshold Duration `yaml:"redThreshold"`
+	CreationNotification  bool     `yaml:"creationNotification"`
+	YellowThreshold       Duration `yaml:"yellowThreshold"`
+	RedThreshold          Duration `yaml:"redThreshold"`
 	FinalWarningThreshold Duration `yaml:"finalWarningThreshold"`
-	DeleteThreshold Duration `yaml:"deleteThreshold"`
+	DeleteThreshold       Duration `yaml:"deleteThreshold"`
+	ExcludeNamespaces     []string `yaml:"excludeNamespaces"`
 }
 
 // Duration wraps time.Duration for YAML unmarshaling.
@@ -74,6 +75,18 @@ func DefaultOperatorConfig() OperatorConfig {
 			RedThreshold:          Duration{336 * time.Hour}, // 14 days
 			FinalWarningThreshold: Duration{720 * time.Hour}, // 30 days
 			DeleteThreshold:       Duration{816 * time.Hour}, // 34 days
+			ExcludeNamespaces: []string{
+				"^openshift-.*",
+				"^kube-.*",
+				"^default$",
+				"^kube-public$",
+				"^kube-node-lease$",
+				"^snappcloud-.*",
+				".*-operator-system$",
+				"^argocd$",
+				"^monitoring$",
+				"^cert-manager$",
+			},
 		},
 		Notifications: NotificationConfig{
 			Mattermost: MattermostConfig{},
@@ -119,4 +132,32 @@ func LoadConfig(path string) (*OperatorConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// NamespaceExcluder holds pre-compiled regex patterns for fast namespace exclusion checks.
+type NamespaceExcluder struct {
+	patterns []*regexp.Regexp
+}
+
+// NewNamespaceExcluder compiles the exclusion patterns from config.
+func NewNamespaceExcluder(patterns []string) (*NamespaceExcluder, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		r, err := regexp.Compile(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid excludeNamespaces pattern %q: %w", p, err)
+		}
+		compiled = append(compiled, r)
+	}
+	return &NamespaceExcluder{patterns: compiled}, nil
+}
+
+// IsExcluded returns true if the namespace name matches any exclusion pattern.
+func (e *NamespaceExcluder) IsExcluded(name string) bool {
+	for _, r := range e.patterns {
+		if r.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }

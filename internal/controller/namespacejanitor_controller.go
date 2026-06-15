@@ -67,12 +67,12 @@ type EventNotification struct {
 	AdditionalRecipients []string  `json:"additionalRecipients"`
 }
 
-
 type NamespaceJanitorReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Notifier notification.Notifier
 	Config   LifecycleConfig
+	Excluder *NamespaceExcluder
 }
 
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors,verbs=get;list;watch;create;update;patch;delete
@@ -103,6 +103,10 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 			if !isRelevant(&nsForCheck) {
 				logger.Info("Namespace is no longer relevant. Skipping creation of default CR.", "namespace", namespaceName)
+				return ctrl.Result{}, client.IgnoreNotFound(err)
+			}
+			if r.Excluder != nil && r.Excluder.IsExcluded(namespaceName) {
+				logger.Info("Namespace matches exclusion pattern. Skipping creation of default CR.", "namespace", namespaceName)
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
 
@@ -143,6 +147,12 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Check if namespace is being deleted
 	if !ns.DeletionTimestamp.IsZero() {
 		logger.Info("Namespace is already in a terminating state. No action needed.", "namespace", ns.Name)
+		return ctrl.Result{}, nil
+	}
+
+	// Check exclusion list
+	if r.Excluder != nil && r.Excluder.IsExcluded(ns.Name) {
+		logger.Info("Namespace matches exclusion pattern. Skipping.", "namespace", ns.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -452,6 +462,10 @@ func (r *NamespaceJanitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 			}),
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				// Exclude namespaces matching exclusion patterns
+				if r.Excluder != nil && r.Excluder.IsExcluded(obj.GetName()) {
+					return false
+				}
 				labels := obj.GetLabels()
 				if labels == nil {
 					return false

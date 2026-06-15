@@ -72,6 +72,6 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: namespacejanitor-namespacejanitor-config
+            name: namespacejanitor-config
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

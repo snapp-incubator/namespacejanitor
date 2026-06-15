@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: namespacejanitor-config
+  name: config
   namespace: namespacejanitor-operator-system
 data:
   config.yaml: |
@@ -11,9 +11,20 @@ data:
       redThreshold: "336h"
       finalWarningThreshold: "720h"
       deleteThreshold: "816h"
+      excludeNamespaces:
+        - "^openshift-.*"
+        - "^kube-.*"
+        - "^default$"
+        - "^kube-public$"
+        - "^kube-node-lease$"
+        - "^snappcloud-.*"
+        - ".*-operator-system$"
+        - "^argocd$"
+        - "^monitoring$"
+        - "^cert-manager$"
     notifications:
       mattermost:
-        webhook: ""
+        webhook: "https://chat.snapp.services/hooks/4wx3ya77ojyt78hpgchbofo43a"
       kafka:
         broker: ""
         topic: "namespace-janitor-notifications"
