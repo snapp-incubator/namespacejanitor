@@ -5,6 +5,7 @@ metadata:
   namespace: namespacejanitor-operator-system
 data:
   config.yaml: |
+    region: ""
     lifecycle:
       creationNotification: true
       yellowThreshold: "72h"

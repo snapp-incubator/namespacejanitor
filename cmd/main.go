@@ -89,6 +89,7 @@ func main() {
 	}
 	setupLog.Info("Operator configuration loaded",
 		"path", configPath,
+		"region", operatorCfg.Region,
 		"yellowThreshold", operatorCfg.Lifecycle.YellowThreshold.Duration,
 		"redThreshold", operatorCfg.Lifecycle.RedThreshold.Duration,
 		"finalWarningThreshold", operatorCfg.Lifecycle.FinalWarningThreshold.Duration,
@@ -97,6 +98,15 @@ func main() {
 		"kafkaConfigured", operatorCfg.Notifications.Kafka.Broker != "",
 		"mattermostConfigured", operatorCfg.Notifications.Mattermost.Webhook != "",
 	)
+
+	// Resolve region: config > env var > "unknown"
+	region := operatorCfg.Region
+	if region == "" || region == "unknown" {
+		if envRegion := os.Getenv("REGION"); envRegion != "" {
+			region = envRegion
+		}
+	}
+	setupLog.Info("Cluster region resolved", "region", region)
 
 	disableHTTP2 := func(c *tls.Config) {
 		setupLog.Info("disabling http/2")
@@ -206,6 +216,7 @@ func main() {
 		Notifier: notifier,
 		Config:   operatorCfg.Lifecycle,
 		Excluder: excluder,
+		Region:   region,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NamespaceJanitor")
 		os.Exit(1)

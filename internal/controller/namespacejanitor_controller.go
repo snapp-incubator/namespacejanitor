@@ -73,6 +73,7 @@ type NamespaceJanitorReconciler struct {
 	Notifier notification.Notifier
 	Config   LifecycleConfig
 	Excluder *NamespaceExcluder
+	Region   string
 }
 
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors,verbs=get;list;watch;create;update;patch;delete
@@ -176,6 +177,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			Age:                  notification.FormatAge(age),
 			Requester:            ns.Annotations[RequesterAnnotationKey],
 			AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 		}, logger)
 		// Mark as notified to ensure idempotency
 		patch := client.MergeFrom(ns.DeepCopy())
@@ -275,6 +277,7 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 	}, logger)
 
 	// Update the CR status if it exists
@@ -303,6 +306,7 @@ func (r *NamespaceJanitorReconciler) sendFinalWarning(ctx context.Context, ns *c
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 	}, logger)
 
 	// Label the namespace so we never re-send this warning.
@@ -349,6 +353,7 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 	}, logger)
 
 	// Use a patch to remove the label from the namespace.
@@ -392,6 +397,7 @@ func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Contex
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 	}, logger)
 
 	logger.Info("Proceeding with namespace deletion", "namespace", ns.Name)

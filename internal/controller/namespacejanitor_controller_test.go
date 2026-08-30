@@ -333,6 +333,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 				Notifier: mockNotifier,
 				Config:   testConfig(),
 				Excluder: testExcluder(),
+				Region:   "test-region",
 			}
 		})
 
@@ -366,6 +367,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			Expect(payloads).To(HaveLen(1))
 			Expect(payloads[0].ActionTaken).To(Equal("NamespaceCreated"))
 			Expect(payloads[0].Requester).To(Equal("mohammadreza.saberi"))
+			Expect(payloads[0].Region).To(Equal("test-region"))
 
 			By("Verifying creation-notified label was applied")
 			Eventually(func(g Gomega) {
@@ -475,6 +477,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			Expect(payloads).To(ContainElement(SatisfyAll(
 				HaveField("ActionTaken", "AppliedredFlag"),
 				HaveField("Requester", "mohammadreza.saberi"),
+				HaveField("Region", "test-region"),
 			)))
 
 			// Cleanup
@@ -584,6 +587,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			Expect(payloads).To(ContainElement(SatisfyAll(
 				HaveField("ActionTaken", "NamespaceClaimed"),
 				HaveField("Requester", "mohammadreza.saberi"),
+				HaveField("Region", "test-region"),
 			)))
 
 			By("Verifying the flag label has been removed")
@@ -632,6 +636,7 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			Expect(payloads).To(ContainElement(SatisfyAll(
 				HaveField("ActionTaken", "AppliedyellowFlag"),
 				HaveField("Requester", ""),
+				HaveField("Region", "test-region"),
 			)))
 
 			// Cleanup
