@@ -25,3 +25,16 @@ go.work
 *.swp
 *.swo
 *~
+
+# Claude Code local configuration
+.claude/
+
+# Build artifacts
+dist/
+
+# Working documents
+DEPLOYMENT_PLAN.md
+PRESENTATION.md
+
+# Knowledge graph output
+graphify-out/
