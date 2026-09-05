@@ -56,11 +56,18 @@ func NewMattermostNotifier(webhookURL string, logger logr.Logger) (Notifier, err
 func (m *MattermostNotifier) Send(payload JanitorPayload) error {
 	info := GetActionInfo(payload.ActionTaken)
 
-	// Build the main text line with emoji and human-readable label
-	mainText := fmt.Sprintf("%s **%s** — `%s`", info.Emoji, info.Label, payload.NamespaceName)
+	region := payload.Region
+	if region == "" {
+		region = "unknown"
+	}
+
+	// Build the main text line with emoji and human-readable label.
+	// [region] prefix makes the source cluster visible at the top of the message.
+	mainText := fmt.Sprintf("[%s] %s **%s** — `%s`", region, info.Emoji, info.Label, payload.NamespaceName)
 
 	// Build fields
 	fields := []mattermostField{
+		{Title: "🌍 Region", Value: fmt.Sprintf("`%s`", region), Short: true},
 		{Title: "🏷️ Namespace", Value: fmt.Sprintf("`%s`", payload.NamespaceName), Short: true},
 		{Title: "📌 Flag", Value: formatFlag(payload.CurrentFlag), Short: true},
 		{Title: "⏳ Age", Value: payload.Age, Short: true},

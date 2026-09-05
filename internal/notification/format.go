@@ -60,23 +60,23 @@ func GetActionInfo(action string) ActionInfo {
 		return ActionInfo{
 			Emoji:    "🔴",
 			Label:    "Red Flag Applied",
-			Guidance: "⚠️ **URGENT**: This namespace will be **permanently deleted** soon. Assign a team immediately: `kc label ns <name> snappcloud.io/team=<your-team>`",
+			Guidance: "⚠️ **URGENT**: This namespace's workloads will be **scaled to zero** soon. Assign a team immediately: `kc label ns <name> snappcloud.io/team=<your-team>`",
 			Severity: "HIGH",
 			Color:    "#FF6600",
 		}
 	case "FinalWarning":
 		return ActionInfo{
 			Emoji:    "🚨",
-			Label:    "Final Warning — Deletion in 24 Hours",
-			Guidance: "🚨 **THIS NAMESPACE WILL BE DELETED IN ~24 HOURS.** Assign a team NOW to prevent data loss: `kc label ns <name> snappcloud.io/team=<your-team>`",
+			Label:    "Final Warning — Scale-Down in 24 Hours",
+			Guidance: "🚨 **THIS NAMESPACE'S WORKLOADS WILL BE SCALED TO ZERO IN ~24 HOURS.** Assign a team NOW to prevent service interruption: `kc label ns <name> snappcloud.io/team=<your-team>`",
 			Severity: "HIGH",
 			Color:    "#FF3300",
 		}
-	case "DeletingNamespace":
+	case "ScalingDownWorkloads":
 		return ActionInfo{
-			Emoji:    "💀",
-			Label:    "Namespace Deleted",
-			Guidance: "This namespace has been permanently deleted because no team claimed it within the grace period.",
+			Emoji:    "⏸️",
+			Label:    "Workloads Scaled Down",
+			Guidance: "All Deployments, StatefulSets, ReplicaSets and CronJobs in this namespace have been scaled to zero. The namespace itself is preserved; scale workloads back up manually if a team claims it.",
 			Severity: "CRITICAL",
 			Color:    "#FF0000",
 		}

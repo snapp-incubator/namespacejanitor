@@ -2,7 +2,6 @@ package notification
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -18,7 +17,7 @@ type JanitorPayload struct {
 	Age                  string   `json:"age"`
 	Requester            string   `json:"requester"`
 	AdditionalRecipients []string `json:"additionalRecipients"`
-	ClusterName          string   `json:"clusterName"`
+	Region               string   `json:"region"`
 }
 
 type JanitorEvent = events.Event[JanitorPayload]
@@ -52,8 +51,9 @@ func New(kafkaCfg eventbus.KafkaConfig, zapLogger *zap.Logger, logrLogger logr.L
 }
 
 func (k *KafkaNotifier) Send(payload JanitorPayload) error {
-	if payload.ClusterName == "" {
-		payload.ClusterName = os.Getenv("CLUSTER_NAME")
+	region := payload.Region
+	if region == "" {
+		region = "unknown"
 	}
 
 	eventToSend := events.NewNotificationEvent(
@@ -62,13 +62,11 @@ func (k *KafkaNotifier) Send(payload JanitorPayload) error {
 	)
 
 	eventToSend.AddHeaderIfNotExists("source", "namespace-janitor-operator")
-	eventToSend.AddHeaderIfNotExists("environment", getEnvironment())
+	eventToSend.AddHeaderIfNotExists("region", region)
 	eventToSend.AddHeaderIfNotExists("timestamp", time.Now().Format(time.RFC3339Nano))
-	priority := k.determinePriority(payload.ActionTaken)
-	eventToSend.AddHeaderIfNotExists("priority", priority)
+	eventToSend.AddHeaderIfNotExists("priority", k.determinePriority(payload))
 	eventToSend.AddHeaderIfNotExists("namespace", payload.NamespaceName)
 	eventToSend.AddHeaderIfNotExists("flag", payload.CurrentFlag)
-	eventToSend.AddHeaderIfNotExists("cluster", payload.ClusterName)
 	eventToSend.AddHeaderIfNotExists("action", payload.ActionTaken)
 	eventToSend.AddHeaderIfNotExists("requester", payload.Requester)
 	eventToSend.AddHeaderIfNotExists("age", payload.Age)
@@ -77,6 +75,7 @@ func (k *KafkaNotifier) Send(payload JanitorPayload) error {
 	k.logger.Info("Publishing janitor event to Kafka",
 		"namespace", payload.NamespaceName,
 		"action", payload.ActionTaken,
+		"region", region,
 		"eventUUID", eventToSend.UUID,
 	)
 
@@ -87,23 +86,23 @@ func (k *KafkaNotifier) Send(payload JanitorPayload) error {
 
 	return nil
 }
-func getEnvironment() string {
-	if env := os.Getenv("ENVIRONMENT"); env != "" {
-		return env
-	}
-	return "okd4-teh-1"
-}
 
-func (k *KafkaNotifier) determinePriority(action string) string {
-	switch action {
-	case "DeletingNamespace":
-		return "critical"
-	case "AppliedRedFlag":
+func (k *KafkaNotifier) determinePriority(payload JanitorPayload) string {
+	switch payload.CurrentFlag {
+	case "red":
 		return "high"
-	case "AppliedYellowFlag":
+	case "yellow":
 		return "medium"
 	default:
-		return "low"
+		// Creation, FinalWarning, ScalingDownWorkloads, NamespaceClaimed
+		switch payload.ActionTaken {
+		case "ScalingDownWorkloads":
+			return "critical"
+		case "FinalWarning":
+			return "high"
+		default:
+			return "low"
+		}
 	}
 }
 

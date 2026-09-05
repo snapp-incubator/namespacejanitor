@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/snapp-incubator/namespacejanitor/internal/notification"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +56,12 @@ const (
 	// CreationNotifiedLabelKey tracks whether the creation notification has been sent.
 	// Value "true" means the creation notification was delivered; the operator will not re-send it.
 	CreationNotifiedLabelKey = "snappcloud.io/creation-notified"
+
+	// ScaledDownLabelKey tracks whether the operator has already scaled
+	// every workload in this namespace to zero. The terminal state for
+	// the first phase — the namespace itself is preserved, but no
+	// controller will re-apply the scale-down once this label is set.
+	ScaledDownLabelKey = "snappcloud.io/scaled-down"
 )
 
 // EventNotification is a struct that represents a notification event(can be expanded)
@@ -73,12 +81,21 @@ type NamespaceJanitorReconciler struct {
 	Notifier notification.Notifier
 	Config   LifecycleConfig
 	Excluder *NamespaceExcluder
+	Region   string
 }
 
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=namespacejanitor.snappcloud.io,resources=namespacejanitors/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;update;patch
+// Final-state action: scale workloads (Deployments, StatefulSets,
+// ReplicaSets, CronJobs) to zero. The namespace itself is preserved so
+// a team can still claim and manually restore it later.
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;update;patch
+
 func janitorCRName(namespaceName string) string {
 	return fmt.Sprintf("%s-janitor", namespaceName)
 }
@@ -176,6 +193,7 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			Age:                  notification.FormatAge(age),
 			Requester:            ns.Annotations[RequesterAnnotationKey],
 			AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+			Region:               r.Region,
 		}, logger)
 		// Mark as notified to ensure idempotency
 		patch := client.MergeFrom(ns.DeepCopy())
@@ -189,14 +207,14 @@ func (r *NamespaceJanitorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// === LIFECYCLE STATE MACHINE ===
-	// Order: Delete > FinalWarning > Red > Yellow
+	// Order: ScaleDown > FinalWarning > Red > Yellow
 	// Each branch is idempotent: it checks current state before transitioning.
 
 	if age >= r.Config.DeleteThreshold.Duration && ns.Labels[FinalWarningLabelKey] == "sent" {
-		// --- Delete State ---
+		// --- Scale-Down State ---
 		logger.Info("Namespace has passed deletion threshold.", "namespace", ns.Name, "age", age.Round(time.Hour))
-		if err := r.notifyAndDeleteNamespace(ctx, &ns, &janitorCR, logger); err != nil {
-			logger.Error(err, "Failed to execute deletion process for namespace", "namespace", ns.Name)
+		if err := r.notifyAndScaleDownNamespace(ctx, &ns, &janitorCR, logger); err != nil {
+			logger.Error(err, "Failed to execute scale-down process for namespace", "namespace", ns.Name)
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, err
 		}
 	} else if age >= r.Config.FinalWarningThreshold.Duration && currentFlagLabel == FlagRed && ns.Labels[FinalWarningLabelKey] != "sent" {
@@ -275,6 +293,7 @@ func (r *NamespaceJanitorReconciler) notifyAndFlagNamespace(ctx context.Context,
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+		Region:               r.Region,
 	}, logger)
 
 	// Update the CR status if it exists
@@ -303,6 +322,7 @@ func (r *NamespaceJanitorReconciler) sendFinalWarning(ctx context.Context, ns *c
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+		Region:               r.Region,
 	}, logger)
 
 	// Label the namespace so we never re-send this warning.
@@ -320,7 +340,7 @@ func (r *NamespaceJanitorReconciler) sendFinalWarning(ctx context.Context, ns *c
 	if janitorCR.UID != "" {
 		janitorCR.Status.LastFlagApplied = string(StageFinalWarning)
 		janitorCR.Status.Conditions = []metav1.Condition{
-			{Type: "Managed", Status: metav1.ConditionTrue, Reason: "FinalWarning", Message: "Final warning sent. Namespace will be deleted within 24 hours.", LastTransitionTime: metav1.Now()},
+			{Type: "Managed", Status: metav1.ConditionTrue, Reason: "FinalWarning", Message: "Final warning sent. Workloads will be scaled to zero within 24 hours.", LastTransitionTime: metav1.Now()},
 		}
 		if err := r.Status().Update(ctx, janitorCR); err != nil {
 			logger.Error(err, "Failed to update NamespaceJanitor status after final warning")
@@ -349,6 +369,7 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+		Region:               r.Region,
 	}, logger)
 
 	// Use a patch to remove the label from the namespace.
@@ -383,26 +404,151 @@ func (r *NamespaceJanitorReconciler) cleanupClaimedNamespace(ctx context.Context
 	return nil
 }
 
-func (r *NamespaceJanitorReconciler) notifyAndDeleteNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
-	logger.Info("Final notification before namespace deletion", "namespace", ns.Name)
+// notifyAndScaleDownNamespace scales every workload in the namespace to
+// zero (idempotently — already-zero workloads are skipped) and, on the
+// first invocation only, sends the final notification, applies the
+// scaled-down label, and updates the NamespaceJanitor CR status.
+//
+// Scaling itself runs on every reconcile, even after the scaled-down
+// label has been applied. This is deliberate: users may re-create
+// workloads in a scaled-down namespace, and we must keep driving them
+// back to zero until the namespace is either claimed or cleaned up
+// manually.
+func (r *NamespaceJanitorReconciler) notifyAndScaleDownNamespace(ctx context.Context, ns *corev1.Namespace, janitorCR *snappcloudv1alpha1.NamespaceJanitor, logger logr.Logger) error {
+	alreadyNotified := ns.Labels[ScaledDownLabelKey] == "true"
+
+	logger.Info("Scaling workloads to zero", "namespace", ns.Name, "alreadyNotified", alreadyNotified)
+	if err := r.scaleDownWorkloads(ctx, ns.Name, logger); err != nil {
+		logger.Error(err, "Failed to scale workloads to zero", "namespace", ns.Name)
+		return fmt.Errorf("scaling workloads in namespace %s: %w", ns.Name, err)
+	}
+
+	if alreadyNotified {
+		// Notification was already sent in a previous reconcile. We only
+		// re-enforce the zero-replica state above.
+		return nil
+	}
+
+	logger.Info("Final notification before scale-down", "namespace", ns.Name)
 	r.sendNotification(ctx, notification.JanitorPayload{
 		NamespaceName:        ns.Name,
 		CurrentFlag:          FlagRed,
-		ActionTaken:          "DeletingNamespace",
+		ActionTaken:          "ScalingDownWorkloads",
 		Age:                  notification.FormatAge(time.Since(ns.CreationTimestamp.Time)),
 		Requester:            ns.Annotations[RequesterAnnotationKey],
 		AdditionalRecipients: janitorCR.Spec.AdditionalRecipients,
+		Region:               r.Region,
 	}, logger)
 
-	logger.Info("Proceeding with namespace deletion", "namespace", ns.Name)
-	if err := r.Delete(ctx, ns); err != nil {
-		if !apierrors.IsNotFound(err) {
-			logger.Error(err, "Failed to delete namespace", "namespace", ns.Name)
-			return err
+	// Mark the namespace as notified so subsequent reconciles don't
+	// re-send the notification. Scaling still runs on every reconcile.
+	patch := client.MergeFrom(ns.DeepCopy())
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+	ns.Labels[ScaledDownLabelKey] = "true"
+	if err := r.Patch(ctx, ns, patch); err != nil {
+		logger.Error(err, "Failed to apply scaled-down label", "namespace", ns.Name)
+		return fmt.Errorf("applying scaled-down label: %w", err)
+	}
+
+	// Update CR status to reflect the terminal state.
+	if janitorCR.UID != "" {
+		janitorCR.Status.LastFlagApplied = string(StageScaledDown)
+		janitorCR.Status.Conditions = []metav1.Condition{
+			{Type: "Managed", Status: metav1.ConditionTrue, Reason: "ScalingDownWorkloads", Message: "All workloads scaled to zero. Namespace preserved.", LastTransitionTime: metav1.Now()},
+		}
+		if err := r.Status().Update(ctx, janitorCR); err != nil {
+			logger.Error(err, "Failed to update NamespaceJanitor status after scale-down")
 		}
 	}
 
-	logger.Info("Namespace deletion command issued successfully", "namespace", ns.Name)
+	logger.Info("Namespace scale-down completed", "namespace", ns.Name)
+	return nil
+}
+
+// scaleDownWorkloads patches every Deployments/StatefulSets/ReplicaSets
+// in the namespace to replicas=0 and every CronJob to suspend=true.
+// Already-scaled workloads are skipped to keep the operation idempotent.
+// DaemonSets and active Jobs are intentionally left untouched — DaemonSets
+// can't be cleanly scaled to zero, and Jobs are one-shot so scaling them
+// has no effect on the cluster.
+func (r *NamespaceJanitorReconciler) scaleDownWorkloads(ctx context.Context, namespaceName string, logger logr.Logger) error {
+	zero := int32(0)
+	suspend := true
+
+	// --- Deployments ---
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments, client.InNamespace(namespaceName)); err != nil {
+		return fmt.Errorf("listing Deployments: %w", err)
+	}
+	for i := range deployments.Items {
+		d := &deployments.Items[i]
+		if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 {
+			continue
+		}
+		patch := client.MergeFrom(d.DeepCopy())
+		d.Spec.Replicas = &zero
+		if err := r.Patch(ctx, d, patch); err != nil {
+			return fmt.Errorf("scaling Deployment %s/%s to zero: %w", namespaceName, d.Name, err)
+		}
+		logger.Info("Scaled Deployment to zero", "namespace", namespaceName, "deployment", d.Name)
+	}
+
+	// --- StatefulSets ---
+	var statefulsets appsv1.StatefulSetList
+	if err := r.List(ctx, &statefulsets, client.InNamespace(namespaceName)); err != nil {
+		return fmt.Errorf("listing StatefulSets: %w", err)
+	}
+	for i := range statefulsets.Items {
+		ss := &statefulsets.Items[i]
+		if ss.Spec.Replicas != nil && *ss.Spec.Replicas == 0 {
+			continue
+		}
+		patch := client.MergeFrom(ss.DeepCopy())
+		ss.Spec.Replicas = &zero
+		if err := r.Patch(ctx, ss, patch); err != nil {
+			return fmt.Errorf("scaling StatefulSet %s/%s to zero: %w", namespaceName, ss.Name, err)
+		}
+		logger.Info("Scaled StatefulSet to zero", "namespace", namespaceName, "statefulset", ss.Name)
+	}
+
+	// --- ReplicaSets (orphaned, not owned by a Deployment) ---
+	var replicasets appsv1.ReplicaSetList
+	if err := r.List(ctx, &replicasets, client.InNamespace(namespaceName)); err != nil {
+		return fmt.Errorf("listing ReplicaSets: %w", err)
+	}
+	for i := range replicasets.Items {
+		rs := &replicasets.Items[i]
+		if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+			continue
+		}
+		patch := client.MergeFrom(rs.DeepCopy())
+		rs.Spec.Replicas = &zero
+		if err := r.Patch(ctx, rs, patch); err != nil {
+			return fmt.Errorf("scaling ReplicaSet %s/%s to zero: %w", namespaceName, rs.Name, err)
+		}
+		logger.Info("Scaled ReplicaSet to zero", "namespace", namespaceName, "replicaset", rs.Name)
+	}
+
+	// --- CronJobs ---
+	var cronjobs batchv1.CronJobList
+	if err := r.List(ctx, &cronjobs, client.InNamespace(namespaceName)); err != nil {
+		return fmt.Errorf("listing CronJobs: %w", err)
+	}
+	for i := range cronjobs.Items {
+		cj := &cronjobs.Items[i]
+		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+			continue
+		}
+		patch := client.MergeFrom(cj.DeepCopy())
+		cj.Spec.Suspend = &suspend
+		if err := r.Patch(ctx, cj, patch); err != nil {
+			return fmt.Errorf("suspending CronJob %s/%s: %w", namespaceName, cj.Name, err)
+		}
+		logger.Info("Suspended CronJob", "namespace", namespaceName, "cronjob", cj.Name)
+	}
+
 	return nil
 }
 

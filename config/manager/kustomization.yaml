@@ -4,6 +4,9 @@ resources:
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
+- name: controller
+  newName: controller
+  newTag: latest
 - name: ghcr.io/snapp-incubator/namespacejanitor
   newName: namespacejanitor
   newTag: 1.1.0

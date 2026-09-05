@@ -13,11 +13,13 @@ const (
 	// StageRed: red flag applied.
 	StageRed LifecycleStage = "red"
 
-	// StageFinalWarning: final warning sent, deletion imminent.
+	// StageFinalWarning: final warning sent, scale-down imminent.
 	StageFinalWarning LifecycleStage = "final-warning"
 
-	// StageDeleted: namespace has been deleted (terminal state).
-	StageDeleted LifecycleStage = "deleted"
+	// StageScaledDown: all workloads in the namespace have been scaled to
+	// zero (terminal state for the first phase). The namespace itself is
+	// preserved so a team can still claim and restore it manually.
+	StageScaledDown LifecycleStage = "scaled-down"
 )
 
 // LifecycleStages defines the ordered progression of stages.
@@ -27,7 +29,7 @@ var LifecycleStages = []LifecycleStage{
 	StageYellow,
 	StageRed,
 	StageFinalWarning,
-	StageDeleted,
+	StageScaledDown,
 }
 
 // LifecycleEvent describes a single lifecycle stage with its human-readable metadata.
@@ -65,15 +67,15 @@ func GetLifecycleEvent(stage LifecycleStage) LifecycleEvent {
 	case StageFinalWarning:
 		return LifecycleEvent{
 			Stage:    StageFinalWarning,
-			Label:    "Final Warning — Deletion in 24 Hours",
+			Label:    "Final Warning — Scale-Down in 24 Hours",
 			Emoji:    "🚨",
 			Severity: "HIGH",
 		}
-	case StageDeleted:
+	case StageScaledDown:
 		return LifecycleEvent{
-			Stage:    StageDeleted,
-			Label:    "Namespace Deleted",
-			Emoji:    "💀",
+			Stage:    StageScaledDown,
+			Label:    "Workloads Scaled Down",
+			Emoji:    "⏸️",
 			Severity: "CRITICAL",
 		}
 	default:

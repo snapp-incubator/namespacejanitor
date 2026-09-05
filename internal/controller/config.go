@@ -10,6 +10,7 @@ import (
 )
 
 type OperatorConfig struct {
+	Region        string             `yaml:"region"`
 	Lifecycle     LifecycleConfig    `yaml:"lifecycle"`
 	Notifications NotificationConfig `yaml:"notifications"`
 }
