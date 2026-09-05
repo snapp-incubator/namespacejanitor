@@ -94,9 +94,9 @@ func (k *KafkaNotifier) determinePriority(payload JanitorPayload) string {
 	case "yellow":
 		return "medium"
 	default:
-		// Creation, FinalWarning, DeletingNamespace, NamespaceClaimed
+		// Creation, FinalWarning, ScalingDownWorkloads, NamespaceClaimed
 		switch payload.ActionTaken {
-		case "DeletingNamespace":
+		case "ScalingDownWorkloads":
 			return "critical"
 		case "FinalWarning":
 			return "high"

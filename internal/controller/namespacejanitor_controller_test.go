@@ -8,6 +8,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -210,8 +212,113 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
 		})
 
-		It("should delete the namespace when the age exceeds DeleteThreshold after final warning", func() {
-			namespaceName := "test-ns-delete"
+		It("should scale workloads to zero when the age exceeds DeleteThreshold after final warning", func() {
+			namespaceName := "test-ns-scaledown"
+			nsKey := types.NamespacedName{Name: namespaceName}
+			testNamespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespaceName,
+					Labels: map[string]string{
+						TeamLabelKey:         TeamUnknown,
+						FlagLabelKey:         FlagRed,
+						FinalWarningLabelKey: "sent",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+			})).To(Succeed())
+
+			replicasOne := int32(1)
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: namespaceName},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicasOne,
+					Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}},
+						Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "nginx"}}},
+					},
+				},
+			}
+			statefulset := &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: namespaceName},
+				Spec: appsv1.StatefulSetSpec{
+					Replicas: &replicasOne,
+					Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "db"}},
+						Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "nginx"}}},
+					},
+				},
+			}
+			cronjob := &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: namespaceName},
+				Spec: batchv1.CronJobSpec{
+					Schedule: "0 0 * * *",
+					JobTemplate: batchv1.JobTemplateSpec{
+						Spec: batchv1.JobSpec{
+							Template: corev1.PodTemplateSpec{
+								Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "busybox"}}, RestartPolicy: corev1.RestartPolicyOnFailure},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
+			Expect(k8sClient.Create(ctx, statefulset)).To(Succeed())
+			Expect(k8sClient.Create(ctx, cronjob)).To(Succeed())
+
+			By("Waiting for the DeleteThreshold to be exceeded")
+			time.Sleep(testConfig().DeleteThreshold.Duration + time.Millisecond*200)
+
+			By("Reconciling to scale workloads down")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName}})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying the namespace is preserved (not deleted)")
+			conservedNS := &corev1.Namespace{}
+			Expect(k8sClient.Get(ctx, nsKey, conservedNS)).To(Succeed())
+			Expect(conservedNS.DeletionTimestamp).To(BeNil())
+
+			By("Verifying the namespace is labeled scaled-down")
+			Eventually(func(g Gomega) {
+				freshNS := &corev1.Namespace{}
+				g.Expect(k8sClient.Get(ctx, nsKey, freshNS)).To(Succeed())
+				g.Expect(freshNS.Labels).To(HaveKeyWithValue(ScaledDownLabelKey, "true"))
+			}, time.Second*10, time.Millisecond*250).Should(Succeed())
+
+			By("Verifying the Deployment is scaled to zero")
+			Eventually(func(g Gomega) {
+				d := &appsv1.Deployment{}
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "web", Namespace: namespaceName}, d)).To(Succeed())
+				g.Expect(d.Spec.Replicas).NotTo(BeNil())
+				g.Expect(*d.Spec.Replicas).To(Equal(int32(0)))
+			}, time.Second*10, time.Millisecond*250).Should(Succeed())
+
+			By("Verifying the StatefulSet is scaled to zero")
+			Eventually(func(g Gomega) {
+				ss := &appsv1.StatefulSet{}
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "db", Namespace: namespaceName}, ss)).To(Succeed())
+				g.Expect(ss.Spec.Replicas).NotTo(BeNil())
+				g.Expect(*ss.Spec.Replicas).To(Equal(int32(0)))
+			}, time.Second*10, time.Millisecond*250).Should(Succeed())
+
+			By("Verifying the CronJob is suspended")
+			Eventually(func(g Gomega) {
+				cj := &batchv1.CronJob{}
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "nightly", Namespace: namespaceName}, cj)).To(Succeed())
+				g.Expect(cj.Spec.Suspend).NotTo(BeNil())
+				g.Expect(*cj.Spec.Suspend).To(BeTrue())
+			}, time.Second*10, time.Millisecond*250).Should(Succeed())
+
+			By("Cleaning up")
+			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+		})
+
+		It("should re-scale workloads created after scale-down has already been applied", func() {
+			namespaceName := "test-ns-scaledown-idempotent"
 			nsKey := types.NamespacedName{Name: namespaceName}
 			testNamespace := &corev1.Namespace{
 				ObjectMeta: metav1.ObjectMeta{
@@ -231,416 +338,462 @@ var _ = Describe("NamespaceJanitor Controller", func() {
 			By("Waiting for the DeleteThreshold to be exceeded")
 			time.Sleep(testConfig().DeleteThreshold.Duration + time.Millisecond*200)
 
-			By("Reconciling to delete the namespace")
+			By("Reconciling once to drive the namespace into the scaled-down state")
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName}})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying the namespace is Terminating")
+			By("Verifying the namespace is labeled scaled-down")
 			Eventually(func(g Gomega) {
-				terminatingNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, terminatingNS)).To(Succeed())
-				g.Expect(terminatingNS.DeletionTimestamp).NotTo(BeNil())
+				freshNS := &corev1.Namespace{}
+				g.Expect(k8sClient.Get(ctx, nsKey, freshNS)).To(Succeed())
+				g.Expect(freshNS.Labels).To(HaveKeyWithValue(ScaledDownLabelKey, "true"))
 			}, time.Second*10, time.Millisecond*250).Should(Succeed())
-		})
-	})
 
-	Context("when an 'unknown' namespace is claimed by a team", func() {
-		var (
-			ctx           context.Context
-			testNamespace *corev1.Namespace
-			janitorCR     *snappcloudv1alpha1.NamespaceJanitor
-			namespaceName string
-		)
+			By("Recording the notification count so we can prove it is not re-sent")
+			initialPayloadCount := 0
+			if mock, ok := controllerReconciler.Notifier.(*MockNotifier); ok {
+				initialPayloadCount = len(mock.GetPayloads())
+			}
 
-		BeforeEach(func() {
-			ctx = context.Background()
-			namespaceName = "test-ns-cleanup"
-			testNamespace = &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-						FlagLabelKey: FlagYellow,
+			By("Re-creating a workload in the now-scaled-down namespace")
+			replicasOne := int32(1)
+			newDeployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "late", Namespace: namespaceName},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicasOne,
+					Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "late"}},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "late"}},
+						Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "nginx"}}},
 					},
 				},
 			}
-			janitorCR = &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      janitorCRName(namespaceName),
-					Namespace: namespaceName,
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, janitorCR)).To(Succeed())
-		})
+			Expect(k8sClient.Create(ctx, newDeployment)).To(Succeed())
 
-		AfterEach(func() {
-			_ = k8sClient.Delete(ctx, testNamespace)
-		})
-
-		It("should remove the flag label and update the CR status", func() {
-			controllerReconciler := &NamespaceJanitorReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Config:   testConfig(),
-				Excluder: testExcluder(),
-			}
-			req := reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			}
-			nsKey := types.NamespacedName{Name: namespaceName}
-			crKey := req.NamespacedName
-
-			By("Simulating the namespace being claimed by a team")
-			currentNS := &corev1.Namespace{}
-			Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-			currentNS.Labels[TeamLabelKey] = "payments-team"
-			Expect(k8sClient.Update(ctx, currentNS)).To(Succeed())
-
-			By("Reconciling to trigger the cleanup logic")
-			_, err := controllerReconciler.Reconcile(ctx, req)
+			By("Reconciling again — this should re-scale the new workload without re-sending the notification")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName}})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Verifying the flag label has been removed")
+			By("Verifying the newly created workload is scaled to zero")
 			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).ShouldNot(HaveKey(FlagLabelKey))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Verifying the Janitor CR status is updated")
-			updatedCR := &snappcloudv1alpha1.NamespaceJanitor{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, crKey, updatedCR)).To(Succeed())
-				g.Expect(updatedCR.Status.Conditions).NotTo(BeEmpty())
-				g.Expect(updatedCR.Status.Conditions[0].Reason).To(Equal("TeamClaimed"))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-		})
-	})
-
-	Context("E2E: notifications with requester tracking", func() {
-		var (
-			ctx                  context.Context
-			mockNotifier         *MockNotifier
-			controllerReconciler *NamespaceJanitorReconciler
-		)
-
-		BeforeEach(func() {
-			ctx = context.Background()
-			mockNotifier = &MockNotifier{}
-			controllerReconciler = &NamespaceJanitorReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Notifier: mockNotifier,
-				Config:   testConfig(),
-				Excluder: testExcluder(),
-				Region:   "test-region",
-			}
-		})
-
-		It("should send creation notification on first reconcile", func() {
-			namespaceName := "test-e2e-creation"
-			nsKey := types.NamespacedName{Name: namespaceName}
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-					},
-					Annotations: map[string]string{
-						RequesterAnnotationKey: "mohammadreza.saberi",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})).To(Succeed())
-
-			By("Reconciling immediately (namespace just created)")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying creation notification was sent")
-			payloads := mockNotifier.GetPayloads()
-			Expect(payloads).To(HaveLen(1))
-			Expect(payloads[0].ActionTaken).To(Equal("NamespaceCreated"))
-			Expect(payloads[0].Requester).To(Equal("mohammadreza.saberi"))
-			Expect(payloads[0].Region).To(Equal("test-region"))
-
-			By("Verifying creation-notified label was applied")
-			Eventually(func(g Gomega) {
-				currentNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).To(HaveKeyWithValue(CreationNotifiedLabelKey, "true"))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Reconciling again — creation notification must NOT re-send (idempotency)")
-			mockNotifier.Reset()
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(mockNotifier.GetPayloads()).To(BeEmpty())
-
-			// Cleanup
-			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
-		})
-
-		It("should send yellow flag notification with requester", func() {
-			namespaceName := "test-e2e-yellow"
-			nsKey := types.NamespacedName{Name: namespaceName}
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-					},
-					Annotations: map[string]string{
-						RequesterAnnotationKey: "mohammadreza.saberi",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})).To(Succeed())
-
-			By("Waiting for the YellowThreshold to be exceeded")
-			time.Sleep(testConfig().YellowThreshold.Duration + time.Millisecond*200)
-
-			By("Reconciling to apply the yellow flag")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying the yellow flag is applied")
-			Eventually(func(g Gomega) {
-				currentNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).To(HaveKeyWithValue(FlagLabelKey, FlagYellow))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Verifying notifications: creation + yellow flag")
-			payloads := mockNotifier.GetPayloads()
-			Expect(len(payloads)).To(BeNumerically(">=", 2))
-			// Last notification should be the yellow flag
-			last := payloads[len(payloads)-1]
-			Expect(last.ActionTaken).To(Equal("AppliedyellowFlag"))
-			Expect(last.NamespaceName).To(Equal(namespaceName))
-			Expect(last.Requester).To(Equal("mohammadreza.saberi"))
-
-			// Cleanup
-			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
-		})
-
-		It("should send red flag notification with requester", func() {
-			namespaceName := "test-e2e-red"
-			nsKey := types.NamespacedName{Name: namespaceName}
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-						FlagLabelKey: FlagYellow,
-					},
-					Annotations: map[string]string{
-						RequesterAnnotationKey: "mohammadreza.saberi",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})).To(Succeed())
-
-			By("Waiting for the RedThreshold to be exceeded")
-			time.Sleep(testConfig().RedThreshold.Duration + time.Millisecond*200)
-
-			By("Reconciling to apply the red flag")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying the red flag is applied")
-			Eventually(func(g Gomega) {
-				currentNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).To(HaveKeyWithValue(FlagLabelKey, FlagRed))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Verifying notification was sent with correct payload")
-			payloads := mockNotifier.GetPayloads()
-			Expect(payloads).To(ContainElement(SatisfyAll(
-				HaveField("ActionTaken", "AppliedredFlag"),
-				HaveField("Requester", "mohammadreza.saberi"),
-				HaveField("Region", "test-region"),
-			)))
-
-			// Cleanup
-			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
-		})
-
-		It("should send final warning then delete the namespace", func() {
-			namespaceName := "test-e2e-finalwarn"
-			nsKey := types.NamespacedName{Name: namespaceName}
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-						FlagLabelKey: FlagRed,
-					},
-					Annotations: map[string]string{
-						RequesterAnnotationKey: "mohammadreza.saberi",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})).To(Succeed())
-
-			By("Waiting for the FinalWarningThreshold to be exceeded")
-			time.Sleep(testConfig().FinalWarningThreshold.Duration + time.Millisecond*200)
-
-			By("Reconciling to trigger final warning")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying final warning notification was sent")
-			payloads := mockNotifier.GetPayloads()
-			Expect(payloads).To(ContainElement(HaveField("ActionTaken", "FinalWarning")))
-
-			By("Verifying final-warning label was applied")
-			Eventually(func(g Gomega) {
-				currentNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).To(HaveKeyWithValue(FinalWarningLabelKey, "sent"))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Waiting for the DeleteThreshold to be exceeded")
-			mockNotifier.Reset()
-			time.Sleep(testConfig().DeleteThreshold.Duration - testConfig().FinalWarningThreshold.Duration + time.Millisecond*400)
-
-			By("Reconciling to delete the namespace")
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying deletion notification was sent")
-			payloads = mockNotifier.GetPayloads()
-			Expect(payloads).To(ContainElement(HaveField("ActionTaken", "DeletingNamespace")))
-
-			By("Verifying the namespace is Terminating")
-			Eventually(func(g Gomega) {
-				terminatingNS := &corev1.Namespace{}
-				g.Expect(k8sClient.Get(ctx, nsKey, terminatingNS)).To(Succeed())
-				g.Expect(terminatingNS.DeletionTimestamp).NotTo(BeNil())
+				d := &appsv1.Deployment{}
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "late", Namespace: namespaceName}, d)).To(Succeed())
+				g.Expect(d.Spec.Replicas).NotTo(BeNil())
+				g.Expect(*d.Spec.Replicas).To(Equal(int32(0)))
 			}, time.Second*10, time.Millisecond*250).Should(Succeed())
-		})
 
-		It("should send NamespaceClaimed notification when team is assigned", func() {
-			namespaceName := "test-e2e-claimed"
-			nsKey := types.NamespacedName{Name: namespaceName}
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespaceName,
-					Labels: map[string]string{
-						TeamLabelKey: TeamUnknown,
-						FlagLabelKey: FlagYellow,
-					},
-					Annotations: map[string]string{
-						RequesterAnnotationKey: "mohammadreza.saberi",
-					},
-				},
+			By("Verifying the notification was NOT re-sent")
+			if mock, ok := controllerReconciler.Notifier.(*MockNotifier); ok {
+				Expect(len(mock.GetPayloads())).To(Equal(initialPayloadCount))
 			}
-			janitorCR := &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      janitorCRName(namespaceName),
-					Namespace: namespaceName,
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, janitorCR)).To(Succeed())
 
-			By("Simulating the namespace being claimed by a team")
-			currentNS := &corev1.Namespace{}
-			Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-			currentNS.Labels[TeamLabelKey] = "payments-team"
-			Expect(k8sClient.Update(ctx, currentNS)).To(Succeed())
-
-			By("Reconciling to trigger the cleanup logic")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying the NamespaceClaimed notification was sent")
-			payloads := mockNotifier.GetPayloads()
-			Expect(payloads).To(ContainElement(SatisfyAll(
-				HaveField("ActionTaken", "NamespaceClaimed"),
-				HaveField("Requester", "mohammadreza.saberi"),
-				HaveField("Region", "test-region"),
-			)))
-
-			By("Verifying the flag label has been removed")
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
-				g.Expect(currentNS.Labels).ShouldNot(HaveKey(FlagLabelKey))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			By("Verifying the CR status reflects TeamClaimed")
-			crKey := types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName}
-			updatedCR := &snappcloudv1alpha1.NamespaceJanitor{}
-			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, crKey, updatedCR)).To(Succeed())
-				g.Expect(updatedCR.Status.Conditions).NotTo(BeEmpty())
-				g.Expect(updatedCR.Status.Conditions[0].Reason).To(Equal("TeamClaimed"))
-			}, time.Second*5, time.Millisecond*250).Should(Succeed())
-
-			// Cleanup
-			_ = k8sClient.Delete(ctx, testNamespace)
-		})
-
-		It("should send notification even when requester annotation is missing", func() {
-			namespaceName := "test-e2e-no-requester"
-			testNamespace := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:   namespaceName,
-					Labels: map[string]string{TeamLabelKey: TeamUnknown},
-				},
-			}
-			Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
-			Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
-				ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})).To(Succeed())
-
-			By("Waiting for the YellowThreshold to be exceeded")
-			time.Sleep(testConfig().YellowThreshold.Duration + time.Millisecond*200)
-
-			By("Reconciling to apply the yellow flag")
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
-			})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying the notification was sent with empty requester")
-			payloads := mockNotifier.GetPayloads()
-			Expect(payloads).To(ContainElement(SatisfyAll(
-				HaveField("ActionTaken", "AppliedyellowFlag"),
-				HaveField("Requester", ""),
-				HaveField("Region", "test-region"),
-			)))
-
-			// Cleanup
+			By("Cleaning up")
 			Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+		})
+
+		Context("when an 'unknown' namespace is claimed by a team", func() {
+			var (
+				ctx           context.Context
+				testNamespace *corev1.Namespace
+				janitorCR     *snappcloudv1alpha1.NamespaceJanitor
+				namespaceName string
+			)
+
+			BeforeEach(func() {
+				ctx = context.Background()
+				namespaceName = "test-ns-cleanup"
+				testNamespace = &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+							FlagLabelKey: FlagYellow,
+						},
+					},
+				}
+				janitorCR = &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      janitorCRName(namespaceName),
+						Namespace: namespaceName,
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, janitorCR)).To(Succeed())
+			})
+
+			AfterEach(func() {
+				_ = k8sClient.Delete(ctx, testNamespace)
+			})
+
+			It("should remove the flag label and update the CR status", func() {
+				controllerReconciler := &NamespaceJanitorReconciler{
+					Client:   k8sClient,
+					Scheme:   k8sClient.Scheme(),
+					Config:   testConfig(),
+					Excluder: testExcluder(),
+				}
+				req := reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				}
+				nsKey := types.NamespacedName{Name: namespaceName}
+				crKey := req.NamespacedName
+
+				By("Simulating the namespace being claimed by a team")
+				currentNS := &corev1.Namespace{}
+				Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+				currentNS.Labels[TeamLabelKey] = "payments-team"
+				Expect(k8sClient.Update(ctx, currentNS)).To(Succeed())
+
+				By("Reconciling to trigger the cleanup logic")
+				_, err := controllerReconciler.Reconcile(ctx, req)
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying the flag label has been removed")
+				Eventually(func(g Gomega) {
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).ShouldNot(HaveKey(FlagLabelKey))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Verifying the Janitor CR status is updated")
+				updatedCR := &snappcloudv1alpha1.NamespaceJanitor{}
+				Eventually(func(g Gomega) {
+					g.Expect(k8sClient.Get(ctx, crKey, updatedCR)).To(Succeed())
+					g.Expect(updatedCR.Status.Conditions).NotTo(BeEmpty())
+					g.Expect(updatedCR.Status.Conditions[0].Reason).To(Equal("TeamClaimed"))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+			})
+		})
+
+		Context("E2E: notifications with requester tracking", func() {
+			var (
+				ctx                  context.Context
+				mockNotifier         *MockNotifier
+				controllerReconciler *NamespaceJanitorReconciler
+			)
+
+			BeforeEach(func() {
+				ctx = context.Background()
+				mockNotifier = &MockNotifier{}
+				controllerReconciler = &NamespaceJanitorReconciler{
+					Client:   k8sClient,
+					Scheme:   k8sClient.Scheme(),
+					Notifier: mockNotifier,
+					Config:   testConfig(),
+					Excluder: testExcluder(),
+					Region:   "test-region",
+				}
+			})
+
+			It("should send creation notification on first reconcile", func() {
+				namespaceName := "test-e2e-creation"
+				nsKey := types.NamespacedName{Name: namespaceName}
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+						},
+						Annotations: map[string]string{
+							RequesterAnnotationKey: "mohammadreza.saberi",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})).To(Succeed())
+
+				By("Reconciling immediately (namespace just created)")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying creation notification was sent")
+				payloads := mockNotifier.GetPayloads()
+				Expect(payloads).To(HaveLen(1))
+				Expect(payloads[0].ActionTaken).To(Equal("NamespaceCreated"))
+				Expect(payloads[0].Requester).To(Equal("mohammadreza.saberi"))
+				Expect(payloads[0].Region).To(Equal("test-region"))
+
+				By("Verifying creation-notified label was applied")
+				Eventually(func(g Gomega) {
+					currentNS := &corev1.Namespace{}
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).To(HaveKeyWithValue(CreationNotifiedLabelKey, "true"))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Reconciling again — creation notification must NOT re-send (idempotency)")
+				mockNotifier.Reset()
+				_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(mockNotifier.GetPayloads()).To(BeEmpty())
+
+				// Cleanup
+				Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+			})
+
+			It("should send yellow flag notification with requester", func() {
+				namespaceName := "test-e2e-yellow"
+				nsKey := types.NamespacedName{Name: namespaceName}
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+						},
+						Annotations: map[string]string{
+							RequesterAnnotationKey: "mohammadreza.saberi",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})).To(Succeed())
+
+				By("Waiting for the YellowThreshold to be exceeded")
+				time.Sleep(testConfig().YellowThreshold.Duration + time.Millisecond*200)
+
+				By("Reconciling to apply the yellow flag")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying the yellow flag is applied")
+				Eventually(func(g Gomega) {
+					currentNS := &corev1.Namespace{}
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).To(HaveKeyWithValue(FlagLabelKey, FlagYellow))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Verifying notifications: creation + yellow flag")
+				payloads := mockNotifier.GetPayloads()
+				Expect(len(payloads)).To(BeNumerically(">=", 2))
+				// Last notification should be the yellow flag
+				last := payloads[len(payloads)-1]
+				Expect(last.ActionTaken).To(Equal("AppliedyellowFlag"))
+				Expect(last.NamespaceName).To(Equal(namespaceName))
+				Expect(last.Requester).To(Equal("mohammadreza.saberi"))
+
+				// Cleanup
+				Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+			})
+
+			It("should send red flag notification with requester", func() {
+				namespaceName := "test-e2e-red"
+				nsKey := types.NamespacedName{Name: namespaceName}
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+							FlagLabelKey: FlagYellow,
+						},
+						Annotations: map[string]string{
+							RequesterAnnotationKey: "mohammadreza.saberi",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})).To(Succeed())
+
+				By("Waiting for the RedThreshold to be exceeded")
+				time.Sleep(testConfig().RedThreshold.Duration + time.Millisecond*200)
+
+				By("Reconciling to apply the red flag")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying the red flag is applied")
+				Eventually(func(g Gomega) {
+					currentNS := &corev1.Namespace{}
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).To(HaveKeyWithValue(FlagLabelKey, FlagRed))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Verifying notification was sent with correct payload")
+				payloads := mockNotifier.GetPayloads()
+				Expect(payloads).To(ContainElement(SatisfyAll(
+					HaveField("ActionTaken", "AppliedredFlag"),
+					HaveField("Requester", "mohammadreza.saberi"),
+					HaveField("Region", "test-region"),
+				)))
+
+				// Cleanup
+				Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+			})
+
+			It("should send final warning then scale workloads to zero", func() {
+				namespaceName := "test-e2e-finalwarn"
+				nsKey := types.NamespacedName{Name: namespaceName}
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+							FlagLabelKey: FlagRed,
+						},
+						Annotations: map[string]string{
+							RequesterAnnotationKey: "mohammadreza.saberi",
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})).To(Succeed())
+
+				By("Waiting for the FinalWarningThreshold to be exceeded")
+				time.Sleep(testConfig().FinalWarningThreshold.Duration + time.Millisecond*200)
+
+				By("Reconciling to trigger final warning")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying final warning notification was sent")
+				payloads := mockNotifier.GetPayloads()
+				Expect(payloads).To(ContainElement(HaveField("ActionTaken", "FinalWarning")))
+
+				By("Verifying final-warning label was applied")
+				Eventually(func(g Gomega) {
+					currentNS := &corev1.Namespace{}
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).To(HaveKeyWithValue(FinalWarningLabelKey, "sent"))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Waiting for the DeleteThreshold to be exceeded")
+				mockNotifier.Reset()
+				time.Sleep(testConfig().DeleteThreshold.Duration - testConfig().FinalWarningThreshold.Duration + time.Millisecond*400)
+
+				By("Reconciling to scale workloads down")
+				_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying scale-down notification was sent")
+				payloads = mockNotifier.GetPayloads()
+				Expect(payloads).To(ContainElement(HaveField("ActionTaken", "ScalingDownWorkloads")))
+
+				By("Verifying the namespace is preserved (not terminating)")
+				conservedNS := &corev1.Namespace{}
+				Expect(k8sClient.Get(ctx, nsKey, conservedNS)).To(Succeed())
+				Expect(conservedNS.DeletionTimestamp).To(BeNil())
+
+				By("Verifying the namespace is labeled scaled-down")
+				Eventually(func(g Gomega) {
+					freshNS := &corev1.Namespace{}
+					g.Expect(k8sClient.Get(ctx, nsKey, freshNS)).To(Succeed())
+					g.Expect(freshNS.Labels).To(HaveKeyWithValue(ScaledDownLabelKey, "true"))
+				}, time.Second*10, time.Millisecond*250).Should(Succeed())
+			})
+
+			It("should send NamespaceClaimed notification when team is assigned", func() {
+				namespaceName := "test-e2e-claimed"
+				nsKey := types.NamespacedName{Name: namespaceName}
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: namespaceName,
+						Labels: map[string]string{
+							TeamLabelKey: TeamUnknown,
+							FlagLabelKey: FlagYellow,
+						},
+						Annotations: map[string]string{
+							RequesterAnnotationKey: "mohammadreza.saberi",
+						},
+					},
+				}
+				janitorCR := &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      janitorCRName(namespaceName),
+						Namespace: namespaceName,
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, janitorCR)).To(Succeed())
+
+				By("Simulating the namespace being claimed by a team")
+				currentNS := &corev1.Namespace{}
+				Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+				currentNS.Labels[TeamLabelKey] = "payments-team"
+				Expect(k8sClient.Update(ctx, currentNS)).To(Succeed())
+
+				By("Reconciling to trigger the cleanup logic")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying the NamespaceClaimed notification was sent")
+				payloads := mockNotifier.GetPayloads()
+				Expect(payloads).To(ContainElement(SatisfyAll(
+					HaveField("ActionTaken", "NamespaceClaimed"),
+					HaveField("Requester", "mohammadreza.saberi"),
+					HaveField("Region", "test-region"),
+				)))
+
+				By("Verifying the flag label has been removed")
+				Eventually(func(g Gomega) {
+					g.Expect(k8sClient.Get(ctx, nsKey, currentNS)).To(Succeed())
+					g.Expect(currentNS.Labels).ShouldNot(HaveKey(FlagLabelKey))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				By("Verifying the CR status reflects TeamClaimed")
+				crKey := types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName}
+				updatedCR := &snappcloudv1alpha1.NamespaceJanitor{}
+				Eventually(func(g Gomega) {
+					g.Expect(k8sClient.Get(ctx, crKey, updatedCR)).To(Succeed())
+					g.Expect(updatedCR.Status.Conditions).NotTo(BeEmpty())
+					g.Expect(updatedCR.Status.Conditions[0].Reason).To(Equal("TeamClaimed"))
+				}, time.Second*5, time.Millisecond*250).Should(Succeed())
+
+				// Cleanup
+				_ = k8sClient.Delete(ctx, testNamespace)
+			})
+
+			It("should send notification even when requester annotation is missing", func() {
+				namespaceName := "test-e2e-no-requester"
+				testNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:   namespaceName,
+						Labels: map[string]string{TeamLabelKey: TeamUnknown},
+					},
+				}
+				Expect(k8sClient.Create(ctx, testNamespace)).To(Succeed())
+				Expect(k8sClient.Create(ctx, &snappcloudv1alpha1.NamespaceJanitor{
+					ObjectMeta: metav1.ObjectMeta{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})).To(Succeed())
+
+				By("Waiting for the YellowThreshold to be exceeded")
+				time.Sleep(testConfig().YellowThreshold.Duration + time.Millisecond*200)
+
+				By("Reconciling to apply the yellow flag")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: janitorCRName(namespaceName), Namespace: namespaceName},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Verifying the notification was sent with empty requester")
+				payloads := mockNotifier.GetPayloads()
+				Expect(payloads).To(ContainElement(SatisfyAll(
+					HaveField("ActionTaken", "AppliedyellowFlag"),
+					HaveField("Requester", ""),
+					HaveField("Region", "test-region"),
+				)))
+
+				// Cleanup
+				Expect(k8sClient.Delete(ctx, testNamespace)).To(Succeed())
+			})
 		})
 	})
 })

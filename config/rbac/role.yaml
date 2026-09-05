@@ -9,7 +9,28 @@ rules:
   resources:
   - namespaces
   verbs:
-  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
   - get
   - list
   - patch
