@@ -1,4 +1,4 @@
-FROM golang:1.25 AS builder
+FROM golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -12,7 +12,7 @@ COPY internal/ internal/
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -mod=vendor -v -a -o manager cmd/main.go
 
-FROM alpine:3.21
+FROM alpine:3.24
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

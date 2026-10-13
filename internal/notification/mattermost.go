@@ -135,7 +135,7 @@ func (m *MattermostNotifier) Send(payload JanitorPayload) error {
 	if err != nil {
 		return fmt.Errorf("sending mattermost webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mattermost webhook returned status %d", resp.StatusCode)
